@@ -1,56 +1,35 @@
-# run_monitor.py - Simple Scheduler for Railway
-import os
-import sys
 import time
+import schedule
 import logging
 from datetime import datetime
 
-# Fix Railway PostgreSQL URL
-if 'DATABASE_URL' in os.environ:
-    if os.environ['DATABASE_URL'].startswith('postgres://'):
-        os.environ['DATABASE_URL'] = os.environ['DATABASE_URL'].replace('postgres://', 'postgresql://', 1)
-        print("Fixed DATABASE_URL format for scheduler", flush=True)
-
-# Import the app
-from app import app, db, PowerProject, MonitoringRun
-
+# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def run_monitoring():
-    """Simple monitoring function"""
+    """Run the monitoring cycle"""
     try:
-        logger.info(f"Running monitoring at {datetime.now()}")
+        logger.info(f"Starting scheduled monitoring at {datetime.now()}")
+        
+        # Import here to avoid circular imports
+        from app import app, db, ComprehensivePowerMonitor
         
         with app.app_context():
-            # Add test data (replace with real monitoring later)
-            test_project = PowerProject(
-                project_name=f"Test Project {datetime.now().strftime('%H%M')}",
-                capacity_mw=200.0,
-                location="Test Location",
-                state="VA",
-                source="Scheduler Test"
-            )
-            db.session.add(test_project)
-            
-            run = MonitoringRun(
-                projects_found=1,
-                status="completed"
-            )
-            db.session.add(run)
-            db.session.commit()
-            
-            logger.info("Monitoring completed successfully")
-            
+            monitor = ComprehensivePowerMonitor()
+            result = monitor.run_comprehensive_monitoring()
+            logger.info(f"Monitoring complete: {result['projects_stored']} new projects stored from {result['sources_checked']} sources")
     except Exception as e:
         logger.error(f"Monitoring failed: {e}")
 
+# Schedule daily at midnight UTC
+schedule.every().day.at("00:00").do(run_monitoring)
+
 # Run once on startup
-logger.info("Scheduler starting...")
+logger.info("Running initial monitoring check...")
 run_monitoring()
 
-# Run every hour (simpler than daily for testing)
-logger.info("Scheduler running - will check every hour")
+logger.info("Scheduler started. Will run daily at 00:00 UTC")
 while True:
-    time.sleep(3600)  # Sleep for 1 hour
-    run_monitoring()
+    schedule.run_pending()
+    time.sleep(60)  # Check every minute
