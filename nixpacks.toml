@@ -2,10 +2,10 @@
 nixPkgs = ['python311', 'postgresql']
 
 [phases.install]
-cmds = ['pip install -r requirements.txt']
+cmds = ['python -m pip install -r requirements.txt']
 
 [phases.build]
 cmds = ['echo "Build complete"']
 
 [start]
-cmd = 'gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 120 app:app'
+cmd = 'python -m gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 120 app:app'
