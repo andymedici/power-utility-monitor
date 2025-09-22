@@ -2,6 +2,16 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, make_response
 from flask_sqlalchemy import SQLAlchemy
 import os
+
+import os
+
+# Fix Railway's PostgreSQL URL format FIRST before anything else
+if os.environ.get('DATABASE_URL', '').startswith('postgres://'):
+    os.environ['DATABASE_URL'] = os.environ['DATABASE_URL'].replace('postgres://', 'postgresql://', 1)
+
+import requests
+import pandas as pd
+# ... rest of your imports
 import requests
 import pandas as pd
 import re
@@ -759,4 +769,5 @@ with app.app_context():
     db.create_all()
 
 if __name__ == '__main__':
+
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
