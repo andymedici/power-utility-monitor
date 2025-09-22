@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <h1><i class="bi bi-list-task"></i> Power Projects</h1>
+        <p class="text-muted">{{ projects.total }} projects found</p>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <h5><i class="bi bi-funnel"></i> Filters</h5>
+    </div>
+    <div class="card-body">
+        <form method="GET">
+            <div class="row">
+                <div class="col-md-2">
+                    <label class="form-label">Min Capacity (MW)</label>
+                    <input type="number" name="min_capacity" class="form-control" 
+                           value="{{ current_filters.get('min_capacity', '') }}" 
+                           placeholder="100">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">State</label>
+                    <select name="state" class="form-select">
+                        <option value="">All States</option>
+                        {% for state in states %}
+                        <option value="{{ state }}" {{ 'selected' if current_filters.get('state') == state else '' }}>
+                            {{ state }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Project Type</label>
+                    <select name="project_type" class="form-select">
+                        <option value="">All Types</option>
+                        {% for ptype in project_types %}
+                        <option value="{{ ptype }}" {{ 'selected' if current_filters.get('project_type') == ptype else '' }}>
+                            {{ ptype|title }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Search</label>
+                    <input type="text" name="search" class="form-control" 
+                           value="{{ current_filters.get('search', '') }}"
+                           placeholder="Project name, customer, location...">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">&nbsp;</label>
+                    <div>
+                        <button type="submit" class="btn btn-primary">Apply</button>
+                        <a href="{{ url_for('projects') }}" class="btn btn-outline-secondary">Clear</a>
+                    </div>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>Project</th>
+                        <th>Capacity</th>
+                        <th>Location</th>
+                        <th>Customer</th>
+                        <th>Type</th>
+                        <th>Source</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for project in projects.items %}
+                    <tr class="{{ 'datacenter' if project.project_type == 'datacenter' else '' }} 
+                               {{ 'high-capacity' if project.capacity_mw >= 300 else '' }}">
+                        <td>
+                            <strong>{{ project.project_name or 'Unnamed Project' }}</strong>
+                            {% if project.status %}<br><small class="text-muted">{{ project.status }}</small>{% endif %}
+                        </td>
+                        <td>
+                            <span class="badge bg-{{ 'danger' if project.capacity_mw >= 300 else 'warning' if project.capacity_mw >= 200 else 'secondary' }}">
+                                {{ "%.0f"|format(project.capacity_mw) }} MW
+                            </span>
+                        </td>
+                        <td>
+                            {% if project.location and project.state %}
+                                {{ project.location }}, {{ project.state }}
+                            {% elif project.state %}
+                                {{ project.state }}
+                            {% else %}
+                                <em>Unknown</em>
+                            {% endif %}
+                        </td>
+                        <td>{{ project.customer or project.utility or '-' }}</td>
+                        <td>
+                            {% if project.project_type and project.project_type != 'unknown' %}
+                                <span class="badge bg-info">{{ project.project_type|title }}</span>
+                            {% endif %}
+                        </td>
+                        <td><small>{{ project.source }}</small></td>
+                        <td><small>{{ project.created_at.strftime('%Y-%m-%d') if project.created_at else '-' }}</small></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Simple pagination -->
+        {% if projects.pages > 1 %}
+        <nav>
+            <ul class="pagination justify-content-center">
+                {% if projects.has_prev %}
+                    <li class="page-item">
+                        <a class="page-link" href="{{ url_for('projects', page=projects.prev_num, **current_filters) }}">Previous</a>
+                    </li>
+                {% endif %}
+                
+                <li class="page-item active">
+                    <span class="page-link">{{ projects.page }} of {{ projects.pages }}</span>
+                </li>
+                
+                {% if projects.has_next %}
+                    <li class="page-item">
+                        <a class="page-link" href="{{ url_for('projects', page=projects.next_num, **current_filters) }}">Next</a>
+                    </li>
+                {% endif %}
+            </ul>
+        </nav>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
