@@ -28,90 +28,6 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Initialize database
 db = SQLAlchemy(app)
 
-# Simple HTML templates as strings (no template files needed)
-BASE_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Power Monitor</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; }
-        .card { background: #f5f5f5; padding: 20px; margin: 20px 0; border-radius: 8px; }
-        .metric { display: inline-block; margin: 20px; padding: 15px; background: white; border-radius: 5px; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
-        .btn { padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }
-        .nav { background: #333; color: white; padding: 15px; margin: -40px -40px 20px -40px; }
-        .nav a { color: white; margin-right: 20px; text-decoration: none; }
-    </style>
-</head>
-<body>
-    <div class="nav">
-        <a href="/">Dashboard</a>
-        <a href="/projects">Projects</a>
-        <a href="/monitoring">Monitoring</a>
-        <a href="/health">Health Check</a>
-    </div>
-    {% block content %}{% endblock %}
-</body>
-</html>
-"""
-
-INDEX_TEMPLATE = """
-{% extends base %}
-{% block content %}
-<h1>⚡ Power Utility Monitor</h1>
-<div class="card">
-    <h2>System Status</h2>
-    <div class="metric">
-        <h3>{{ total_projects }}</h3>
-        <p>Total Projects</p>
-    </div>
-    <div class="metric">
-        <h3>{{ recent_projects }}</h3>
-        <p>Recent Projects</p>
-    </div>
-    <div class="metric">
-        <h3>{{ last_run }}</h3>
-        <p>Last Run</p>
-    </div>
-</div>
-<div class="card">
-    <h2>Quick Actions</h2>
-    <a href="/run-monitor" class="btn">Run Monitor Now</a>
-    <a href="/projects" class="btn">View Projects</a>
-</div>
-{% endblock %}
-"""
-
-PROJECTS_TEMPLATE = """
-{% extends base %}
-{% block content %}
-<h1>Power Projects</h1>
-<div class="card">
-    <table>
-        <tr>
-            <th>Project Name</th>
-            <th>Capacity (MW)</th>
-            <th>Location</th>
-            <th>Date</th>
-        </tr>
-        {% for project in projects %}
-        <tr>
-            <td>{{ project.project_name or 'Unknown' }}</td>
-            <td>{{ project.capacity_mw }}</td>
-            <td>{{ project.location or 'N/A' }}</td>
-            <td>{{ project.created_at.strftime('%Y-%m-%d') if project.created_at else 'N/A' }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-    {% if not projects %}
-    <p>No projects yet. Click "Run Monitor Now" on the dashboard to fetch data.</p>
-    {% endif %}
-</div>
-{% endblock %}
-"""
-
 # Database Models
 class PowerProject(db.Model):
     __tablename__ = 'power_projects'
@@ -142,13 +58,55 @@ def index():
         ).count()
         last_run = MonitoringRun.query.order_by(MonitoringRun.run_date.desc()).first()
         
-        return render_template_string(
-            INDEX_TEMPLATE,
-            base=BASE_TEMPLATE,
-            total_projects=total,
-            recent_projects=recent,
-            last_run=last_run.run_date.strftime('%Y-%m-%d %H:%M') if last_run else 'Never'
-        )
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Power Monitor</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; }
+                .card { background: #f5f5f5; padding: 20px; margin: 20px 0; border-radius: 8px; }
+                .metric { display: inline-block; margin: 20px; padding: 15px; background: white; border-radius: 5px; }
+                table { width: 100%; border-collapse: collapse; }
+                th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+                .btn { padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; display: inline-block; margin: 5px; }
+                .nav { background: #333; color: white; padding: 15px; margin: -40px -40px 20px -40px; }
+                .nav a { color: white; margin-right: 20px; text-decoration: none; }
+            </style>
+        </head>
+        <body>
+            <div class="nav">
+                <a href="/">Dashboard</a>
+                <a href="/projects">Projects</a>
+                <a href="/monitoring">Monitoring</a>
+                <a href="/health">Health Check</a>
+            </div>
+            
+            <h1>⚡ Power Utility Monitor</h1>
+            <div class="card">
+                <h2>System Status</h2>
+                <div class="metric">
+                    <h3>""" + str(total) + """</h3>
+                    <p>Total Projects</p>
+                </div>
+                <div class="metric">
+                    <h3>""" + str(recent) + """</h3>
+                    <p>Recent Projects</p>
+                </div>
+                <div class="metric">
+                    <h3>""" + (last_run.run_date.strftime('%Y-%m-%d %H:%M') if last_run else 'Never') + """</h3>
+                    <p>Last Run</p>
+                </div>
+            </div>
+            <div class="card">
+                <h2>Quick Actions</h2>
+                <a href="/run-monitor" class="btn">Run Monitor Now</a>
+                <a href="/projects" class="btn">View Projects</a>
+            </div>
+        </body>
+        </html>
+        """
+        return html
     except Exception as e:
         logger.error(f"Error in index: {e}")
         return f"Error: {str(e)}", 500
@@ -157,11 +115,59 @@ def index():
 def projects():
     try:
         projects = PowerProject.query.order_by(PowerProject.created_at.desc()).limit(100).all()
-        return render_template_string(
-            PROJECTS_TEMPLATE,
-            base=BASE_TEMPLATE,
-            projects=projects
-        )
+        
+        rows = ""
+        for project in projects:
+            rows += f"""
+            <tr>
+                <td>{project.project_name or 'Unknown'}</td>
+                <td>{project.capacity_mw}</td>
+                <td>{project.location or 'N/A'}</td>
+                <td>{project.created_at.strftime('%Y-%m-%d') if project.created_at else 'N/A'}</td>
+            </tr>
+            """
+        
+        if not projects:
+            rows = "<tr><td colspan='4'>No projects yet. Click 'Run Monitor Now' on the dashboard to fetch data.</td></tr>"
+        
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Power Monitor - Projects</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; }
+                .card { background: #f5f5f5; padding: 20px; margin: 20px 0; border-radius: 8px; }
+                table { width: 100%; border-collapse: collapse; }
+                th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+                .nav { background: #333; color: white; padding: 15px; margin: -40px -40px 20px -40px; }
+                .nav a { color: white; margin-right: 20px; text-decoration: none; }
+            </style>
+        </head>
+        <body>
+            <div class="nav">
+                <a href="/">Dashboard</a>
+                <a href="/projects">Projects</a>
+                <a href="/monitoring">Monitoring</a>
+                <a href="/health">Health Check</a>
+            </div>
+            
+            <h1>Power Projects</h1>
+            <div class="card">
+                <table>
+                    <tr>
+                        <th>Project Name</th>
+                        <th>Capacity (MW)</th>
+                        <th>Location</th>
+                        <th>Date</th>
+                    </tr>
+                    """ + rows + """
+                </table>
+            </div>
+        </body>
+        </html>
+        """
+        return html
     except Exception as e:
         logger.error(f"Error in projects: {e}")
         return f"Error: {str(e)}", 500
@@ -221,22 +227,79 @@ def run_monitor():
         db.session.add(run)
         db.session.commit()
         
-        return jsonify({
-            "status": "success",
-            "message": f"Added {len(sample_projects)} test projects"
-        })
+        return """
+        <html>
+        <body style="font-family: Arial, sans-serif; margin: 40px;">
+            <h2>✅ Monitoring Complete</h2>
+            <p>Added test projects successfully.</p>
+            <a href="/" style="padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px;">Back to Dashboard</a>
+        </body>
+        </html>
+        """
     except Exception as e:
         logger.error(f"Error in monitoring: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return f"Error: {str(e)}", 500
 
 @app.route('/monitoring')
 def monitoring():
     """Monitoring status page"""
-    return """
-    <h1>Monitoring Status</h1>
-    <p>System is operational</p>
-    <a href="/run-monitor">Run Monitor Now</a><br>
-    <a href="/">Back to Dashboard</a>
+    runs = MonitoringRun.query.order_by(MonitoringRun.run_date.desc()).limit(10).all()
+    
+    rows = ""
+    for run in runs:
+        rows += f"""
+        <tr>
+            <td>{run.run_date.strftime('%Y-%m-%d %H:%M')}</td>
+            <td>{run.projects_found}</td>
+            <td>{run.status}</td>
+        </tr>
+        """
+    
+    if not runs:
+        rows = "<tr><td colspan='3'>No monitoring runs yet.</td></tr>"
+    
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Power Monitor - Monitoring</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; }}
+            .card {{ background: #f5f5f5; padding: 20px; margin: 20px 0; border-radius: 8px; }}
+            table {{ width: 100%; border-collapse: collapse; }}
+            th, td {{ padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }}
+            .btn {{ padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; display: inline-block; margin: 5px; }}
+            .nav {{ background: #333; color: white; padding: 15px; margin: -40px -40px 20px -40px; }}
+            .nav a {{ color: white; margin-right: 20px; text-decoration: none; }}
+        </style>
+    </head>
+    <body>
+        <div class="nav">
+            <a href="/">Dashboard</a>
+            <a href="/projects">Projects</a>
+            <a href="/monitoring">Monitoring</a>
+            <a href="/health">Health Check</a>
+        </div>
+        
+        <h1>Monitoring Status</h1>
+        <div class="card">
+            <p>System is operational</p>
+            <a href="/run-monitor" class="btn">Run Monitor Now</a>
+        </div>
+        
+        <div class="card">
+            <h3>Recent Runs</h3>
+            <table>
+                <tr>
+                    <th>Date/Time</th>
+                    <th>Projects Found</th>
+                    <th>Status</th>
+                </tr>
+                {rows}
+            </table>
+        </div>
+    </body>
+    </html>
     """
 
 # Error handler
