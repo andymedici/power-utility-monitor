@@ -1263,6 +1263,84 @@ def reset_database():
         """
     except Exception as e:
         return f"Error resetting database: {str(e)}", 500
+        @app.route('/test-sources')
+def test_sources():
+    """Test each data source individually to diagnose issues"""
+    results = []
+    monitor = RealDataPowerMonitor()
+    
+    # Test each source
+    test_sources = [
+        ('CAISO', 'http://www.caiso.com/planning/Documents/AllGeneratorInterconnectionQueue.xlsx'),
+        ('PJM', 'https://www.pjm.com/pub/planning/downloads/queues/active-queue.csv'),
+        ('ERCOT', 'http://www.ercot.com/content/wcm/lists/226522/GIS_Report_10_01_2024.xlsx'),
+        ('MISO', 'https://cdn.misoenergy.org/Generator%20Interconnection%20Queue.xlsx'),
+    ]
+    
+    for name, url in test_sources:
+        try:
+            response = monitor.session.get(url, timeout=10, verify=False)
+            status_code = response.status_code
+            content_size = len(response.content)
+            
+            # Try to detect content type
+            content_type = response.headers.get('Content-Type', 'unknown')
+            
+            results.append({
+                'source': name,
+                'url': url,
+                'status': status_code,
+                'size': content_size,
+                'type': content_type,
+                'success': status_code == 200
+            })
+        except Exception as e:
+            results.append({
+                'source': name,
+                'url': url,
+                'status': 'ERROR',
+                'error': str(e),
+                'success': False
+            })
+    
+    # Format results
+    html = """
+    <html>
+    <head>
+        <style>
+            body { font-family: Arial; margin: 40px; }
+            table { width: 100%; border-collapse: collapse; }
+            th, td { padding: 10px; text-align: left; border: 1px solid #ddd; }
+            .success { background: #d4edda; }
+            .error { background: #f8d7da; }
+        </style>
+    </head>
+    <body>
+        <h1>Data Source Test Results</h1>
+        <table>
+            <tr><th>Source</th><th>Status</th><th>Size/Error</th><th>Type</th></tr>
+    """
+    
+    for r in results:
+        row_class = 'success' if r['success'] else 'error'
+        status = r.get('status', 'ERROR')
+        detail = f"{r.get('size', 0)} bytes" if r['success'] else r.get('error', 'Unknown error')
+        html += f"""
+        <tr class="{row_class}">
+            <td>{r['source']}</td>
+            <td>{status}</td>
+            <td>{detail}</td>
+            <td>{r.get('type', 'N/A')}</td>
+        </tr>
+        """
+    
+    html += """
+        </table>
+        <p><a href="/">Back to Dashboard</a></p>
+    </body>
+    </html>
+    """
+    return html
 
 # Create tables on startup
 with app.app_context():
@@ -1275,3 +1353,4 @@ with app.app_context():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
