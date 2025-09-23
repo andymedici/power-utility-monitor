@@ -1194,6 +1194,28 @@ def init_db():
     except Exception as e:
         return f"Error: {str(e)}", 500
 
+        @app.route('/reset-db')
+def reset_database():
+    """Reset database with new schema - WARNING: This will delete all data!"""
+    try:
+        # Drop all tables
+        db.drop_all()
+        # Recreate with new schema
+        db.create_all()
+        return """
+        <html>
+        <body style="font-family: Arial; margin: 40px;">
+            <h2>✅ Database Reset Complete</h2>
+            <p>All tables have been recreated with the new schema.</p>
+            <p><strong>Note:</strong> All previous data has been deleted.</p>
+            <a href="/" style="padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px;">Go to Dashboard</a>
+            <a href="/run-monitor" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px; margin-left: 10px;">Run Monitor to Populate Data</a>
+        </body>
+        </html>
+        """
+    except Exception as e:
+        return f"Error resetting database: {str(e)}", 500
+
 # Create tables on startup
 with app.app_context():
     try:
@@ -1205,3 +1227,4 @@ with app.app_context():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
