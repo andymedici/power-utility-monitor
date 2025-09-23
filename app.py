@@ -1194,7 +1194,7 @@ def init_db():
     except Exception as e:
         return f"Error: {str(e)}", 500
 
-        @app.route('/reset-db')
+@app.route('/reset-db')
 def reset_database():
     """Reset database with new schema - WARNING: This will delete all data!"""
     try:
@@ -1227,4 +1227,5 @@ with app.app_context():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
 
