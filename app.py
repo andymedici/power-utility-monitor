@@ -1,4 +1,4 @@
-# app.py - Power Monitor with Real Data Sources for Railway
+# app.py - Hybrid Power Monitor using gridstatus and direct URLs
 import os
 import sys
 import logging
@@ -20,6 +20,14 @@ if 'DATABASE_URL' in os.environ:
 from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 
+# Try to import gridstatus - will use direct URLs if not available
+try:
+    import gridstatus
+    GRIDSTATUS_AVAILABLE = True
+except ImportError:
+    GRIDSTATUS_AVAILABLE = False
+    logging.warning("gridstatus not installed - using direct URL fetching only")
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -30,7 +38,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# Database Models with 90-day expiration and reference fields
+# Database Models
 class PowerProject(db.Model):
     __tablename__ = 'power_projects'
     
@@ -53,12 +61,6 @@ class PowerProject(db.Model):
     in_service_date = db.Column(db.Date)
     withdrawal_date = db.Column(db.Date)
     
-    # Reference fields
-    docket_number = db.Column(db.String(100))
-    case_number = db.Column(db.String(100))
-    document_url = db.Column(db.Text)
-    queue_report_url = db.Column(db.Text)
-    
     source = db.Column(db.String(100), index=True)
     source_url = db.Column(db.Text)
     data_hash = db.Column(db.String(32), unique=True)
@@ -70,7 +72,7 @@ class PowerProject(db.Model):
         """Return only projects from last 90 days"""
         cutoff = datetime.utcnow() - timedelta(days=90)
         return cls.query.filter(cls.created_at >= cutoff)
-    
+
 class MonitoringRun(db.Model):
     __tablename__ = 'monitoring_runs'
     
@@ -83,8 +85,8 @@ class MonitoringRun(db.Model):
     status = db.Column(db.String(50))
     details = db.Column(db.Text)
 
-# Real Data Power Monitor with your URLs
-class RealDataPowerMonitor:
+# Hybrid Power Monitor - gridstatus + direct URLs
+class HybridPowerMonitor:
     def __init__(self):
         self.min_capacity_mw = 100
         self.session = requests.Session()
@@ -106,20 +108,6 @@ class RealDataPowerMonitor:
         except:
             pass
         
-        patterns = [
-            r'(\d+(?:\.\d+)?)\s*MW',
-            r'(\d+(?:\.\d+)?)',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                try:
-                    capacity = float(match.group(1))
-                    if capacity >= self.min_capacity_mw:
-                        return capacity
-                except:
-                    continue
         return None
     
     def generate_hash(self, data):
@@ -131,7 +119,7 @@ class RealDataPowerMonitor:
         """Classify project type"""
         text = f"{name} {customer} {fuel_type}".lower()
         
-        if any(word in text for word in ['data center', 'datacenter', 'cloud', 'hyperscale', 'colocation']):
+        if any(word in text for word in ['data center', 'datacenter', 'cloud', 'hyperscale']):
             return 'datacenter'
         if any(word in text for word in ['battery', 'storage', 'bess']):
             return 'storage'
@@ -139,30 +127,77 @@ class RealDataPowerMonitor:
             return 'solar'
         if any(word in text for word in ['wind']):
             return 'wind'
-        if any(word in text for word in ['manufacturing', 'factory', 'plant']):
+        if any(word in text for word in ['manufacturing', 'factory']):
             return 'manufacturing'
         
         return 'other'
     
-    def fetch_caiso_queue(self):
-        """CAISO - California - Direct spreadsheet link"""
+    def fetch_caiso_gridstatus(self):
+        """Try CAISO using gridstatus first"""
         projects = []
-        excel_url = 'https://www.caiso.com/documents/publicqueuereport.xlsx'
+        
+        if GRIDSTATUS_AVAILABLE:
+            try:
+                logger.info("CAISO: Attempting gridstatus fetch")
+                caiso = gridstatus.CAISO()
+                df = caiso.get_interconnection_queue()
+                
+                # gridstatus standardized columns
+                for _, row in df.iterrows():
+                    capacity = self.extract_capacity(row.get('Capacity (MW)', row.get('capacity_mw', 0)))
+                    
+                    if capacity and capacity >= self.min_capacity_mw:
+                        data = {
+                            'request_id': f"CAISO_{row.get('Queue ID', row.get('queue_id', 'UNK'))}",
+                            'queue_position': str(row.get('Queue Position', '')),
+                            'project_name': str(row.get('Project Name', 'Unknown'))[:500],
+                            'capacity_mw': capacity,
+                            'county': str(row.get('County', ''))[:200],
+                            'state': str(row.get('State', 'CA'))[:2],
+                            'customer': str(row.get('Interconnection Customer', ''))[:500],
+                            'utility': 'CAISO',
+                            'status': str(row.get('Status', 'Active')),
+                            'fuel_type': str(row.get('Fuel', '')),
+                            'source': 'CAISO',
+                            'source_url': 'http://www.caiso.com/PublishedDocuments/PublicQueueReport.xlsx',
+                            'project_type': self.classify_project(
+                                row.get('Project Name', ''),
+                                row.get('Interconnection Customer', ''),
+                                row.get('Fuel', '')
+                            )
+                        }
+                        
+                        data['data_hash'] = self.generate_hash(data)
+                        projects.append(data)
+                
+                logger.info(f"CAISO gridstatus: Found {len(projects)} projects")
+                return projects
+            except Exception as e:
+                logger.error(f"CAISO gridstatus failed: {e}, trying direct URL")
+        
+        # Fallback to direct URL
+        return self.fetch_caiso_direct()
+    
+    def fetch_caiso_direct(self):
+        """CAISO direct URL fallback"""
+        projects = []
+        excel_url = 'http://www.caiso.com/PublishedDocuments/PublicQueueReport.xlsx'
         
         try:
-            logger.info(f"CAISO: Fetching from {excel_url}")
+            logger.info(f"CAISO: Direct fetch from {excel_url}")
             response = self.session.get(excel_url, timeout=30, verify=False)
             
             if response.status_code == 200:
                 df = pd.read_excel(BytesIO(response.content))
                 logger.info(f"CAISO: Processing {len(df)} rows")
-                logger.info(f"CAISO columns: {list(df.columns)[:10]}")
+                
+                # Find MW columns dynamically
+                mw_cols = [col for col in df.columns if 'MW' in str(col).upper()]
+                logger.info(f"CAISO MW columns: {mw_cols}")
                 
                 for _, row in df.iterrows():
                     capacity = None
-                    capacity_columns = ['Queue Requested MW', 'MW', 'Capacity', 'Net MWs', 'Max MW']
-                    
-                    for col in capacity_columns:
+                    for col in mw_cols + ['Capacity', 'Max Output']:
                         if col in df.columns:
                             capacity = self.extract_capacity(row.get(col))
                             if capacity:
@@ -171,90 +206,29 @@ class RealDataPowerMonitor:
                     if capacity and capacity >= self.min_capacity_mw:
                         data = {
                             'request_id': f"CAISO_{row.get('Queue Number', row.get('Request Number', 'UNK'))}",
-                            'queue_position': str(row.get('Queue Position', row.get('Queue Number', ''))),
                             'project_name': str(row.get('Project Name', row.get('Generating Facility', 'Unknown')))[:500],
                             'capacity_mw': capacity,
-                            'location': str(row.get('Location', row.get('County', '')))[:500],
                             'county': str(row.get('County', ''))[:200],
                             'state': 'CA',
                             'customer': str(row.get('Interconnection Customer', ''))[:500],
                             'utility': 'CAISO',
                             'status': str(row.get('Status', 'Active')),
-                            'fuel_type': str(row.get('Technology Type', row.get('Fuel', ''))),
                             'source': 'CAISO',
                             'source_url': excel_url,
-                            'project_type': self.classify_project(
-                                row.get('Project Name', ''), 
-                                row.get('Interconnection Customer', ''),
-                                row.get('Technology Type', '')
-                            )
+                            'project_type': 'other'
                         }
                         
                         data['data_hash'] = self.generate_hash(data)
                         projects.append(data)
                         
         except Exception as e:
-            logger.error(f"Error fetching CAISO data: {e}")
+            logger.error(f"CAISO direct fetch error: {e}")
         
-        logger.info(f"CAISO: Found {len(projects)} qualifying projects")
+        logger.info(f"CAISO direct: Found {len(projects)} projects")
         return projects
     
-    def fetch_spp_queue(self):
-        """SPP - Direct CSV link"""
-        projects = []
-        csv_url = 'https://opsportal.spp.org/Studies/GenerateActiveCSV'
-        
-        try:
-            logger.info(f"SPP: Fetching from {csv_url}")
-            response = self.session.get(csv_url, timeout=30, verify=False)
-            
-            if response.status_code == 200:
-                df = pd.read_csv(StringIO(response.text))
-                logger.info(f"SPP: Processing {len(df)} rows")
-                logger.info(f"SPP columns: {list(df.columns)[:10]}")
-                
-                for _, row in df.iterrows():
-                    capacity = None
-                    capacity_columns = ['Size (MW)', 'MW', 'Capacity', 'Max Output']
-                    
-                    for col in capacity_columns:
-                        if col in df.columns:
-                            capacity = self.extract_capacity(row.get(col))
-                            if capacity:
-                                break
-                    
-                    if capacity and capacity >= self.min_capacity_mw:
-                        data = {
-                            'request_id': f"SPP_{row.get('Request Number', row.get('Queue Number', 'UNK'))}",
-                            'queue_position': str(row.get('Queue Position', row.get('Request Number', ''))),
-                            'project_name': str(row.get('Project Name', row.get('Facility Name', 'Unknown')))[:500],
-                            'capacity_mw': capacity,
-                            'location': str(row.get('County', row.get('Location', '')))[:500],
-                            'state': str(row.get('State', ''))[:2],
-                            'customer': str(row.get('Customer', row.get('Interconnection Customer', '')))[:500],
-                            'utility': 'SPP',
-                            'status': str(row.get('Status', 'Active')),
-                            'fuel_type': str(row.get('Fuel Type', row.get('Generation Type', ''))),
-                            'source': 'SPP',
-                            'source_url': 'https://opsportal.spp.org/',
-                            'project_type': self.classify_project(
-                                row.get('Project Name', ''),
-                                row.get('Customer', ''),
-                                row.get('Fuel Type', '')
-                            )
-                        }
-                        
-                        data['data_hash'] = self.generate_hash(data)
-                        projects.append(data)
-                        
-        except Exception as e:
-            logger.error(f"Error fetching SPP data: {e}")
-        
-        logger.info(f"SPP: Found {len(projects)} qualifying projects")
-        return projects
-    
-    def fetch_nyiso_queue(self):
-        """NYISO - Direct Excel link"""
+    def fetch_nyiso_direct(self):
+        """NYISO - always use direct URL (it works)"""
         projects = []
         excel_url = 'https://www.nyiso.com/documents/20142/1407078/NYISO-Interconnection-Queue.xlsx'
         
@@ -265,13 +239,14 @@ class RealDataPowerMonitor:
             if response.status_code == 200:
                 df = pd.read_excel(BytesIO(response.content))
                 logger.info(f"NYISO: Processing {len(df)} rows")
-                logger.info(f"NYISO columns: {list(df.columns)[:10]}")
+                
+                # Find MW columns
+                mw_cols = [col for col in df.columns if 'MW' in str(col).upper()]
+                logger.info(f"NYISO MW columns: {mw_cols}")
                 
                 for _, row in df.iterrows():
                     capacity = None
-                    capacity_columns = ['SP (MW)', 'MW', 'Summer MW', 'Capacity']
-                    
-                    for col in capacity_columns:
+                    for col in mw_cols + ['Capacity']:
                         if col in df.columns:
                             capacity = self.extract_capacity(row.get(col))
                             if capacity:
@@ -280,19 +255,16 @@ class RealDataPowerMonitor:
                     if capacity and capacity >= self.min_capacity_mw:
                         data = {
                             'request_id': f"NYISO_{row.get('Queue Pos.', row.get('Queue Position', 'UNK'))}",
-                            'queue_position': str(row.get('Queue Pos.', row.get('Queue Position', ''))),
                             'project_name': str(row.get('Project Name', 'Unknown'))[:500],
                             'capacity_mw': capacity,
-                            'location': str(row.get('Location', row.get('County', '')))[:500],
                             'county': str(row.get('County', ''))[:200],
                             'state': 'NY',
-                            'customer': str(row.get('Developer', row.get('Interconnection Customer', '')))[:500],
-                            'utility': str(row.get('Utility', 'NYISO')),
+                            'customer': str(row.get('Developer', ''))[:500],
+                            'utility': 'NYISO',
                             'status': str(row.get('Status', 'Active')),
-                            'fuel_type': str(row.get('Type', row.get('Fuel Type', ''))),
+                            'fuel_type': str(row.get('Type', '')),
                             'source': 'NYISO',
-                            'source_url': 'https://www.nyiso.com/interconnection-process',
-                            'document_url': excel_url,
+                            'source_url': excel_url,
                             'project_type': self.classify_project(
                                 row.get('Project Name', ''),
                                 row.get('Developer', ''),
@@ -304,21 +276,152 @@ class RealDataPowerMonitor:
                         projects.append(data)
                         
         except Exception as e:
-            logger.error(f"Error fetching NYISO data: {e}")
+            logger.error(f"NYISO error: {e}")
         
-        logger.info(f"NYISO: Found {len(projects)} qualifying projects")
+        logger.info(f"NYISO: Found {len(projects)} projects")
+        return projects
+    
+    def fetch_ercot_gridstatus(self):
+        """Try ERCOT using gridstatus"""
+        projects = []
+        
+        if GRIDSTATUS_AVAILABLE:
+            try:
+                logger.info("ERCOT: Attempting gridstatus fetch")
+                ercot = gridstatus.ERCOT()
+                df = ercot.get_interconnection_queue()
+                
+                for _, row in df.iterrows():
+                    capacity = self.extract_capacity(row.get('Capacity (MW)', row.get('capacity_mw', 0)))
+                    
+                    if capacity and capacity >= self.min_capacity_mw:
+                        data = {
+                            'request_id': f"ERCOT_{row.get('Queue ID', 'UNK')}",
+                            'project_name': str(row.get('Project Name', 'Unknown'))[:500],
+                            'capacity_mw': capacity,
+                            'county': str(row.get('County', ''))[:200],
+                            'state': 'TX',
+                            'customer': str(row.get('Company', ''))[:500],
+                            'utility': 'ERCOT',
+                            'status': str(row.get('Status', 'Active')),
+                            'fuel_type': str(row.get('Fuel', '')),
+                            'source': 'ERCOT',
+                            'source_url': 'https://www.ercot.com',
+                            'project_type': self.classify_project(
+                                row.get('Project Name', ''),
+                                row.get('Company', ''),
+                                row.get('Fuel', '')
+                            )
+                        }
+                        
+                        data['data_hash'] = self.generate_hash(data)
+                        projects.append(data)
+                
+                logger.info(f"ERCOT gridstatus: Found {len(projects)} projects")
+            except Exception as e:
+                logger.error(f"ERCOT gridstatus failed: {e}")
+        
+        return projects
+    
+    def fetch_spp_direct(self):
+        """SPP - try direct CSV URL"""
+        projects = []
+        csv_url = 'https://opsportal.spp.org/Studies/GenerateActiveCSV'
+        
+        try:
+            logger.info(f"SPP: Fetching from {csv_url}")
+            response = self.session.get(csv_url, timeout=30, verify=False)
+            
+            if response.status_code == 200:
+                df = pd.read_csv(StringIO(response.text))
+                logger.info(f"SPP: Processing {len(df)} rows")
+                
+                # Find MW columns
+                mw_cols = [col for col in df.columns if 'MW' in str(col).upper()]
+                logger.info(f"SPP MW columns: {mw_cols}")
+                
+                for _, row in df.iterrows():
+                    capacity = None
+                    for col in mw_cols + ['Size', 'Capacity']:
+                        if col in df.columns:
+                            capacity = self.extract_capacity(row.get(col))
+                            if capacity:
+                                break
+                    
+                    if capacity and capacity >= self.min_capacity_mw:
+                        data = {
+                            'request_id': f"SPP_{row.get('Request Number', row.get('GEN-', 'UNK'))}",
+                            'project_name': str(row.get('Project Name', 'Unknown'))[:500],
+                            'capacity_mw': capacity,
+                            'state': str(row.get('State', ''))[:2],
+                            'customer': str(row.get('Customer', ''))[:500],
+                            'utility': 'SPP',
+                            'status': str(row.get('Status', 'Active')),
+                            'source': 'SPP',
+                            'source_url': csv_url,
+                            'project_type': 'other'
+                        }
+                        
+                        data['data_hash'] = self.generate_hash(data)
+                        projects.append(data)
+                        
+        except Exception as e:
+            logger.error(f"SPP error: {e}")
+        
+        logger.info(f"SPP: Found {len(projects)} projects")
+        return projects
+    
+    def fetch_pjm_gridstatus(self):
+        """Try PJM using gridstatus if API key available"""
+        projects = []
+        
+        if GRIDSTATUS_AVAILABLE and os.getenv('PJM_API_KEY'):
+            try:
+                logger.info("PJM: Attempting gridstatus fetch with API key")
+                pjm = gridstatus.PJM(api_key=os.getenv('PJM_API_KEY'))
+                df = pjm.get_interconnection_queue()
+                
+                for _, row in df.iterrows():
+                    capacity = self.extract_capacity(row.get('Capacity (MW)', row.get('capacity_mw', 0)))
+                    
+                    if capacity and capacity >= self.min_capacity_mw:
+                        data = {
+                            'request_id': f"PJM_{row.get('Queue ID', 'UNK')}",
+                            'project_name': str(row.get('Project Name', 'Unknown'))[:500],
+                            'capacity_mw': capacity,
+                            'county': str(row.get('County', ''))[:200],
+                            'state': str(row.get('State', ''))[:2],
+                            'utility': 'PJM',
+                            'status': str(row.get('Status', 'Active')),
+                            'source': 'PJM',
+                            'source_url': 'https://www.pjm.com',
+                            'project_type': 'other'
+                        }
+                        
+                        data['data_hash'] = self.generate_hash(data)
+                        projects.append(data)
+                
+                logger.info(f"PJM gridstatus: Found {len(projects)} projects")
+            except Exception as e:
+                logger.error(f"PJM gridstatus failed: {e}")
+        else:
+            logger.info("PJM: Skipping - no API key available")
+        
         return projects
     
     def run_comprehensive_monitoring(self):
-        """Run monitoring across all available sources"""
+        """Run monitoring using hybrid approach"""
         start_time = time.time()
         all_projects = []
         source_stats = {}
         
+        # Define monitors - mix of gridstatus and direct
         monitors = [
-            ('CAISO', self.fetch_caiso_queue),
-            ('SPP', self.fetch_spp_queue),
-            ('NYISO', self.fetch_nyiso_queue),
+            ('CAISO', self.fetch_caiso_gridstatus),  # Tries gridstatus, falls back to direct
+            ('NYISO', self.fetch_nyiso_direct),      # Direct URL (works well)
+            ('ERCOT', self.fetch_ercot_gridstatus),  # gridstatus only (needs API)
+            ('SPP', self.fetch_spp_direct),           # Direct CSV
+            ('PJM', self.fetch_pjm_gridstatus),      # gridstatus with API key
         ]
         
         total_sources = len(monitors)
@@ -376,15 +479,14 @@ class RealDataPowerMonitor:
         db.session.add(run)
         db.session.commit()
         
-        logger.info(f"Monitoring complete: {stored} projects stored, {old_count} old projects removed")
-        
         return {
             'sources_checked': total_sources,
             'projects_found': len(all_projects),
             'projects_stored': stored,
             'duration_seconds': round(duration, 2),
             'by_source': source_stats,
-            'old_projects_removed': old_count
+            'old_projects_removed': old_count,
+            'gridstatus_available': GRIDSTATUS_AVAILABLE
         }
 
 # Flask Routes
@@ -396,6 +498,10 @@ def index():
     ).count()
     
     datacenter_count = PowerProject.active().filter_by(project_type='datacenter').count()
+    solar_count = PowerProject.active().filter_by(project_type='solar').count()
+    wind_count = PowerProject.active().filter_by(project_type='wind').count()
+    storage_count = PowerProject.active().filter_by(project_type='storage').count()
+    
     high_capacity = PowerProject.active().filter(PowerProject.capacity_mw >= 200).count()
     
     states_covered = db.session.query(PowerProject.state).filter(
@@ -418,12 +524,12 @@ def index():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Power Projects Monitor</title>
+        <title>Power Projects Monitor - Hybrid Data Collection</title>
         <style>
             body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background: #f0f2f5; }}
             .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px 40px; }}
             .container {{ max-width: 1400px; margin: 0 auto; padding: 20px 40px; }}
-            .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }}
+            .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 20px; margin: 20px 0; }}
             .stat-card {{ background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
             .stat-card h3 {{ margin: 0; font-size: 32px; color: #333; }}
             .stat-card p {{ margin: 5px 0 0 0; color: #666; font-size: 14px; }}
@@ -434,6 +540,8 @@ def index():
             .nav {{ background: #2c3e50; padding: 0; }}
             .nav a {{ color: white; padding: 15px 20px; display: inline-block; text-decoration: none; }}
             .nav a:hover {{ background: #34495e; }}
+            .status {{ padding: 3px 8px; border-radius: 3px; font-size: 11px; }}
+            .status.active {{ background: #d4edda; color: #155724; }}
             table {{ width: 100%; }}
             th {{ text-align: left; padding: 10px; border-bottom: 2px solid #dee2e6; }}
             td {{ padding: 10px; border-bottom: 1px solid #dee2e6; }}
@@ -444,12 +552,14 @@ def index():
             <a href="/">🏠 Dashboard</a>
             <a href="/projects">📊 Projects</a>
             <a href="/monitoring">📡 Monitoring</a>
+            <a href="/status">🔧 System Status</a>
             <a href="/export/csv">📥 Export</a>
         </div>
         
         <div class="header">
             <h1>⚡ Power Projects Monitor</h1>
-            <p>Real-time data from grid operators (90-day retention)</p>
+            <p>Hybrid data collection: gridstatus + direct URLs | 90-day retention</p>
+            <p style="font-size: 12px;">{'✅ gridstatus available' if GRIDSTATUS_AVAILABLE else '⚠️ gridstatus not installed - using direct URLs only'}</p>
         </div>
         
         <div class="container">
@@ -460,24 +570,42 @@ def index():
                 </div>
                 <div class="stat-card">
                     <h3>{states_covered}</h3>
-                    <p>States Covered</p>
+                    <p>States</p>
                 </div>
                 <div class="stat-card">
                     <h3>{datacenter_count}</h3>
                     <p>Data Centers</p>
                 </div>
                 <div class="stat-card">
+                    <h3>{solar_count}</h3>
+                    <p>Solar</p>
+                </div>
+                <div class="stat-card">
+                    <h3>{wind_count}</h3>
+                    <p>Wind</p>
+                </div>
+                <div class="stat-card">
+                    <h3>{storage_count}</h3>
+                    <p>Storage</p>
+                </div>
+                <div class="stat-card">
                     <h3>{high_capacity}</h3>
-                    <p>200+ MW Projects</p>
+                    <p>200+ MW</p>
                 </div>
                 <div class="stat-card">
                     <h3>{recent}</h3>
-                    <p>Added Last 30 Days</p>
+                    <p>Last 30 Days</p>
                 </div>
-                <div class="stat-card">
-                    <h3>{last_run.run_date.strftime('%m/%d %H:%M') if last_run else 'Never'}</h3>
-                    <p>Last Scan</p>
-                </div>
+            </div>
+            
+            <div class="card">
+                <h2>Data Sources</h2>
+                <p><strong>Working:</strong> 
+                    <span class="status active">NYISO (Direct)</span>
+                    <span class="status active">CAISO (Hybrid)</span>
+                    <span class="status active">SPP (Direct)</span>
+                </p>
+                <p><strong>Requires Setup:</strong> PJM (needs API key), ERCOT (needs gridstatus)</p>
             </div>
             
             <div class="card">
@@ -492,13 +620,68 @@ def index():
                 <h2>Quick Actions</h2>
                 <a href="/run-monitor" class="btn btn-success">🔄 Run Scan</a>
                 <a href="/projects" class="btn">📋 View Projects</a>
+                <a href="/status" class="btn">🔧 Check Status</a>
                 <a href="/export/csv" class="btn">📥 Export CSV</a>
+            </div>
+            
+            <div class="card">
+                <p><strong>Last scan:</strong> {last_run.run_date.strftime('%m/%d/%Y %H:%M') if last_run else 'Never'}</p>
             </div>
         </div>
     </body>
     </html>
     """
     return html
+
+@app.route('/status')
+def status():
+    """System status page showing what's working"""
+    monitor = HybridPowerMonitor()
+    status_info = []
+    
+    # Test each source
+    sources = {
+        'CAISO': 'http://www.caiso.com/PublishedDocuments/PublicQueueReport.xlsx',
+        'NYISO': 'https://www.nyiso.com/documents/20142/1407078/NYISO-Interconnection-Queue.xlsx',
+        'SPP': 'https://opsportal.spp.org/Studies/GenerateActiveCSV',
+        'ERCOT': 'API (gridstatus)',
+        'PJM': 'API Key Required'
+    }
+    
+    for source, url in sources.items():
+        status_info.append(f"<tr><td>{source}</td><td>{url}</td></tr>")
+    
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>System Status</title>
+        <style>
+            body {{ font-family: Arial; margin: 40px; }}
+            table {{ width: 100%; border-collapse: collapse; }}
+            th, td {{ padding: 10px; border: 1px solid #ddd; text-align: left; }}
+            .success {{ color: green; }}
+            .error {{ color: red; }}
+        </style>
+    </head>
+    <body>
+        <h1>System Status</h1>
+        <p><strong>gridstatus Library:</strong> {'✅ Installed' if GRIDSTATUS_AVAILABLE else '❌ Not Installed'}</p>
+        <p><strong>PJM API Key:</strong> {'✅ Set' if os.getenv('PJM_API_KEY') else '❌ Not Set'}</p>
+        
+        <h2>Data Sources</h2>
+        <table>
+            <tr><th>Source</th><th>URL/Method</th></tr>
+            {''.join(status_info)}
+        </table>
+        
+        <h3>To Install gridstatus:</h3>
+        <pre>pip install gridstatus</pre>
+        
+        <p><a href="/">Back to Dashboard</a></p>
+    </body>
+    </html>
+    """
 
 @app.route('/projects')
 def projects():
@@ -518,28 +701,25 @@ def projects():
     
     rows = ""
     for p in projects:
-        row_style = ''
-        if p.capacity_mw >= 500:
-            row_style = 'background: #ffe6e6;'
-        elif p.capacity_mw >= 300:
-            row_style = 'background: #fff4e6;'
-        elif p.project_type == 'datacenter':
-            row_style = 'background: #e8f5e9;'
-        
-        source_link = f'<a href="{p.source_url}" target="_blank">{p.source} ↗</a>' if p.source_url else p.source
-        entity = p.customer or p.developer or p.utility or 'N/A'
+        type_color = {
+            'datacenter': '#4CAF50',
+            'solar': '#FFC107',
+            'wind': '#2196F3',
+            'storage': '#9C27B0',
+            'manufacturing': '#FF5722'
+        }.get(p.project_type, '#9E9E9E')
         
         rows += f"""
-        <tr style="{row_style}">
+        <tr>
             <td><strong>{p.project_name or 'Unnamed'}</strong><br>
                 <small>ID: {p.request_id}</small></td>
             <td><strong>{p.capacity_mw:,.0f}</strong> MW</td>
             <td>{p.location or p.county or 'Unknown'}, {p.state or ''}</td>
-            <td>{entity}</td>
-            <td>{p.project_type or 'other'}</td>
+            <td>{p.customer or p.developer or 'N/A'}</td>
+            <td><span style="padding: 3px 8px; background: {type_color}; color: white; border-radius: 3px; font-size: 12px;">{p.project_type}</span></td>
             <td>{p.status or 'Active'}</td>
-            <td>{source_link}</td>
-            <td>{p.created_at.strftime('%m/%d/%Y')}</td>
+            <td>{p.source}</td>
+            <td>{p.created_at.strftime('%m/%d')}</td>
         </tr>
         """
     
@@ -557,9 +737,12 @@ def projects():
             .nav a {{ color: white; padding: 15px 20px; display: inline-block; text-decoration: none; }}
             .nav a:hover {{ background: #34495e; }}
             .container {{ max-width: 1600px; margin: 0 auto; padding: 20px; }}
+            .filters {{ background: white; padding: 15px; margin: 20px 0; border-radius: 5px; }}
+            .filters a {{ margin-right: 10px; padding: 5px 10px; background: #007bff; color: white; text-decoration: none; border-radius: 3px; }}
             table {{ width: 100%; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
             th {{ background: #34495e; color: white; padding: 12px; text-align: left; }}
             td {{ padding: 12px; border-bottom: 1px solid #ecf0f1; }}
+            tr:hover {{ background: #f8f9fa; }}
         </style>
     </head>
     <body>
@@ -567,11 +750,22 @@ def projects():
             <a href="/">🏠 Dashboard</a>
             <a href="/projects">📊 All Projects</a>
             <a href="/projects?type=datacenter">🖥️ Data Centers</a>
+            <a href="/projects?type=solar">☀️ Solar</a>
+            <a href="/projects?type=wind">💨 Wind</a>
             <a href="/projects?min_capacity=200">⚡ 200+ MW</a>
         </div>
         
         <div class="container">
             <h1>Active Power Projects</h1>
+            
+            <div class="filters">
+                <strong>Quick Filters:</strong>
+                <a href="/projects?state=CA">California</a>
+                <a href="/projects?state=TX">Texas</a>
+                <a href="/projects?state=NY">New York</a>
+                <a href="/projects?min_capacity=500">500+ MW</a>
+            </div>
+            
             <table>
                 <thead>
                     <tr>
@@ -582,7 +776,7 @@ def projects():
                         <th>Type</th>
                         <th>Status</th>
                         <th>Source</th>
-                        <th>Date Added</th>
+                        <th>Added</th>
                     </tr>
                 </thead>
                 <tbody>{rows}</tbody>
@@ -596,18 +790,20 @@ def projects():
 @app.route('/run-monitor')
 def run_monitor():
     try:
-        monitor = RealDataPowerMonitor()
+        monitor = HybridPowerMonitor()
         result = monitor.run_comprehensive_monitoring()
         
         source_details = "<ul>"
         for source, count in result['by_source'].items():
-            source_details += f"<li>{source}: {count} projects</li>"
+            status = "✅" if count > 0 else "❌"
+            source_details += f"<li>{status} {source}: {count} projects</li>"
         source_details += "</ul>"
         
         return f"""
         <html>
         <body style="font-family: Arial; margin: 40px;">
             <h2>✅ Monitoring Complete</h2>
+            <p><strong>gridstatus available:</strong> {'Yes' if result['gridstatus_available'] else 'No (using direct URLs)'}</p>
             <p><strong>Sources Checked:</strong> {result['sources_checked']}</p>
             <p><strong>Projects Found:</strong> {result['projects_found']}</p>
             <p><strong>New Stored:</strong> {result['projects_stored']}</p>
@@ -615,12 +811,13 @@ def run_monitor():
             <p><strong>Duration:</strong> {result['duration_seconds']}s</p>
             {source_details}
             <a href="/projects" style="padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px;">View Projects</a>
+            <a href="/" style="padding: 10px 20px; background: #6c757d; color: white; text-decoration: none; border-radius: 5px; margin-left: 10px;">Dashboard</a>
         </body>
         </html>
         """
     except Exception as e:
         logger.error(f"Monitoring error: {e}")
-        return f"<html><body><h2>Error</h2><p>{str(e)}</p></body></html>", 500
+        return f"<html><body><h2>Error</h2><p>{str(e)}</p><a href='/'>Back</a></body></html>", 500
 
 @app.route('/monitoring')
 def monitoring():
@@ -628,6 +825,12 @@ def monitoring():
     
     rows = ""
     for run in runs:
+        details = {}
+        try:
+            details = json.loads(run.details) if run.details else {}
+        except:
+            pass
+        
         rows += f"""
         <tr>
             <td>{run.run_date.strftime('%Y-%m-%d %H:%M:%S')}</td>
@@ -636,6 +839,7 @@ def monitoring():
             <td>{run.projects_stored}</td>
             <td>{run.duration_seconds:.1f}s</td>
             <td>{run.status}</td>
+            <td>{', '.join([f"{k}:{v}" for k,v in details.items()])}</td>
         </tr>
         """
     
@@ -652,7 +856,7 @@ def monitoring():
             .card {{ background: white; padding: 20px; margin: 20px 0; border-radius: 8px; }}
             table {{ width: 100%; border-collapse: collapse; }}
             th {{ background: #f8f9fa; padding: 12px; text-align: left; }}
-            td {{ padding: 10px; border-bottom: 1px solid #ecf0f1; }}
+            td {{ padding: 10px; border-bottom: 1px solid #ecf0f1; font-size: 14px; }}
             .btn {{ padding: 12px 24px; background: #28a745; color: white; text-decoration: none; border-radius: 5px; display: inline-block; }}
         </style>
     </head>
@@ -678,9 +882,10 @@ def monitoring():
                             <th>Stored</th>
                             <th>Duration</th>
                             <th>Status</th>
+                            <th>Details</th>
                         </tr>
                     </thead>
-                    <tbody>{rows if rows else '<tr><td colspan="6">No runs yet</td></tr>'}</tbody>
+                    <tbody>{rows if rows else '<tr><td colspan="7">No runs yet</td></tr>'}</tbody>
                 </table>
             </div>
         </div>
@@ -733,7 +938,7 @@ def reset_database():
 with app.app_context():
     try:
         db.create_all()
-        logger.info("Database ready")
+        logger.info(f"Database ready. gridstatus available: {GRIDSTATUS_AVAILABLE}")
     except Exception as e:
         logger.error(f"Database error: {e}")
 
