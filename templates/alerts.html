@@ -1,34 +1,22 @@
 {% extends "base.html" %}
-
+{% block title %}Email Alerts{% endblock %}
 {% block content %}
-<div class="row mb-4">
-    <div class="col">
-        <h1><i class="bi bi-bell"></i> Email Alerts</h1>
-        <p class="text-muted">Get notified when new high-value projects are discovered</p>
-    </div>
-</div>
-
+<h2 class="mb-4"><i class="bi bi-bell"></i> Email Alerts</h2>
 <div class="row">
     <div class="col-md-6">
         <div class="card">
-            <div class="card-header">
-                <h5><i class="bi bi-plus-circle"></i> Subscribe to Alerts</h5>
-            </div>
+            <div class="card-header bg-white"><h5><i class="bi bi-plus-circle"></i> Subscribe</h5></div>
             <div class="card-body">
-                <form action="{{ url_for('subscribe_alerts') }}" method="post">
+                <form method="post" action="{{ url_for('subscribe_alerts') }}">
                     <div class="mb-3">
-                        <label class="form-label">Email Address</label>
-                        <input type="email" name="email" class="form-control" required 
-                               placeholder="your.email@company.com">
+                        <label class="form-label">Email</label>
+                        <input type="email" name="email" class="form-control" required placeholder="your@email.com">
                     </div>
-                    
                     <div class="mb-3">
-                        <label class="form-label">Minimum Capacity (MW)</label>
-                        <input type="number" name="min_capacity" class="form-control" 
-                               value="200" min="100" step="50">
-                        <small class="form-text text-muted">Only notify for projects above this capacity</small>
+                        <label class="form-label">Min Capacity (MW)</label>
+                        <input type="number" name="min_capacity" class="form-control" value="200" min="100">
+                        <small class="text-muted">Only notify for projects above this capacity</small>
                     </div>
-                    
                     <div class="mb-3">
                         <label class="form-label">States (optional)</label>
                         <select name="states" class="form-select" multiple>
@@ -37,72 +25,35 @@
                             <option value="TX">Texas</option>
                             <option value="NY">New York</option>
                             <option value="IL">Illinois</option>
-                            <option value="PA">Pennsylvania</option>
-                            <option value="OH">Ohio</option>
-                            <option value="FL">Florida</option>
-                            <option value="WA">Washington</option>
-                            <option value="OR">Oregon</option>
                         </select>
-                        <small class="form-text text-muted">Hold Ctrl/Cmd to select multiple. Leave blank for all states.</small>
+                        <small class="text-muted">Hold Ctrl/Cmd for multiple. Leave blank for all.</small>
                     </div>
-                    
-                    <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-bell-fill"></i> Subscribe
-                    </button>
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-bell-fill"></i> Subscribe</button>
                 </form>
             </div>
         </div>
     </div>
-    
     <div class="col-md-6">
         <div class="card">
-            <div class="card-header">
-                <h5><i class="bi bi-info-circle"></i> How It Works</h5>
-            </div>
+            <div class="card-header bg-white"><h5><i class="bi bi-info-circle"></i> How It Works</h5></div>
             <div class="card-body">
                 <h6>Alert System:</h6>
-                <ul>
-                    <li>Daily monitoring scans all free data sources</li>
-                    <li>New projects matching your criteria trigger emails</li>
-                    <li>Alerts include project details and source links</li>
-                    <li>Free email service via Resend</li>
-                </ul>
-                
-                <h6 class="mt-3">Data Sources Monitored:</h6>
-                <ul>
-                    <li><strong>FERC eLibrary</strong> - National coverage</li>
-                    <li><strong>CAISO</strong> - California projects</li>
-                    <li><strong>PJM</strong> - Northern Virginia + 12 states</li>
-                    <li><strong>ERCOT</strong> - Texas projects</li>
-                    <li><strong>State PUCs</strong> - Regulatory filings</li>
-                </ul>
-                
-                <h6 class="mt-3">You'll Get Alerts For:</h6>
-                <ul>
-                    <li>🏢 Data centers (100+ MW)</li>
-                    <li>🏭 Manufacturing facilities</li>
-                    <li>⚡ High capacity projects (200+ MW)</li>
-                    <li>📍 Your selected states only</li>
-                </ul>
+                <ul><li>Daily scans from 10+ sources</li><li>Emails for high-confidence projects</li><li>Customizable filters</li></ul>
+                <h6>Data Sources:</h6>
+                <ul><li>7 ISOs (CAISO, PJM, MISO, ERCOT, etc.)</li><li>FERC filings</li><li>State PUCs</li><li>Utility press releases</li></ul>
             </div>
         </div>
-        
         {% if subscriptions %}
         <div class="card mt-3">
-            <div class="card-header">
-                <h5><i class="bi bi-people"></i> Active Subscriptions</h5>
-            </div>
-            <div class="card-body">
+            <div class="card-header bg-white"><h5>Active Subscriptions</h5></div>
+            <ul class="list-group list-group-flush">
                 {% for sub in subscriptions %}
-                <div class="d-flex justify-content-between mb-2">
-                    <div>
-                        <strong>{{ sub.email }}</strong><br>
-                        <small class="text-muted">{{ sub.min_capacity }}+ MW</small>
-                    </div>
+                <li class="list-group-item d-flex justify-content-between">
+                    <div><strong>{{ sub.email }}</strong><br><small>{{ sub.min_capacity }}+ MW</small></div>
                     <span class="badge bg-success">Active</span>
-                </div>
+                </li>
                 {% endfor %}
-            </div>
+            </ul>
         </div>
         {% endif %}
     </div>
