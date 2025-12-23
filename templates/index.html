@@ -1,91 +1,239 @@
 {% extends "base.html" %}
 
+{% block title %}Dashboard - Power Utility Monitor{% endblock %}
+
 {% block content %}
 <div class="row mb-4">
-    <div class="col-md-8">
-        <div class="card bg-hunter border-0 shadow">
-            <div class="card-body p-4">
-                <h1 class="display-5 fw-bold">Market Intelligence</h1>
-                <p class="lead">Scanning 5 ISOs for stealth high-load interconnection requests.</p>
-                <form action="/trigger" method="POST">
-                    <button class="btn btn-light fw-bold">🔄 Run Manual Scan</button>
-                </form>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-4">
-        <div class="card shadow-sm h-100">
-            <div class="card-body">
-                <h6 class="text-muted text-uppercase">Suspected Data Centers</h6>
-                <h2 class="display-4 fw-bold text-danger">{{ suspected_dc }}</h2>
-                <small>Out of {{ total }} active projects</small>
+    <div class="col-12">
+        <div class="card bg-gradient text-white" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+            <div class="card-body p-5">
+                <h1 class="display-4 fw-bold mb-3">
+                    <i class="bi bi-crosshair"></i> Power Market Intelligence
+                </h1>
+                <p class="lead mb-4">
+                    Scanning 7 ISOs + FERC + State PUCs + Utility News for stealth data center projects
+                </p>
+                <div class="d-flex gap-3">
+                    <a href="{{ url_for('trigger_monitor') }}" class="btn btn-light btn-lg">
+                        <i class="bi bi-arrow-clockwise"></i> Run Manual Scan
+                    </a>
+                    <a href="{{ url_for('projects', filter='hunter') }}" class="btn btn-outline-light btn-lg">
+                        <i class="bi bi-crosshair"></i> View Targets
+                    </a>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
+<!-- Stats Row -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="stat-value text-danger">{{ suspected_dc }}</div>
+            <div class="stat-label">High-Confidence DCs</div>
+            <small class="text-muted">Hunter Score ≥ 70</small>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="stat-value text-primary">{{ total }}</div>
+            <div class="stat-label">Total Projects</div>
+            <small class="text-muted">Last 90 days</small>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="stat-value text-success">{{ source_stats|length }}</div>
+            <div class="stat-label">Active Sources</div>
+            <small class="text-muted">ISOs + PUCs + News</small>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="stat-value text-warning">
+                {% if logs %}{{ logs[0].run_date.strftime('%H:%M') }}{% else %}--:--{% endif %}
+            </div>
+            <div class="stat-label">Last Scan</div>
+            <small class="text-muted">
+                {% if logs %}{{ logs[0].run_date.strftime('%b %d') }}{% else %}Never{% endif %}
+            </small>
+        </div>
+    </div>
+</div>
+
+<!-- Main Content Row -->
 <div class="row">
-    <div class="col-md-8">
-        <div class="card shadow-sm">
-            <div class="card-header bg-white">
-                <h5 class="mb-0">🎯 Top Priority Targets</h5>
+    <!-- Priority Targets -->
+    <div class="col-lg-8 mb-4">
+        <div class="card">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="bi bi-crosshair text-danger"></i>
+                    Top Priority Targets
+                </h5>
+                <a href="{{ url_for('projects', filter='hunter') }}" class="btn btn-sm btn-outline-primary">
+                    View All <i class="bi bi-arrow-right"></i>
+                </a>
             </div>
             <div class="table-responsive">
                 <table class="table table-hover mb-0">
                     <thead class="table-light">
                         <tr>
-                            <th>Confidence</th>
+                            <th style="width: 80px;">Score</th>
                             <th>Project / Customer</th>
-                            <th>Load</th>
-                            <th>Location</th>
+                            <th style="width: 100px;">Load</th>
+                            <th style="width: 200px;">Location</th>
                             <th>Signals</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for p in top_hunters %}
-                        <tr>
+                        <tr onclick="window.location='{{ url_for('project_detail', id=p.id) }}';" style="cursor: pointer;">
                             <td>
-                                <span class="badge {% if p.hunter_score > 70 %}bg-danger{% elif p.hunter_score > 40 %}bg-warning text-dark{% else %}bg-success{% endif %}">
-                                    {{ p.hunter_score }}%
+                                <span class="hunter-score-badge {% if p.hunter_score >= 70 %}score-high{% elif p.hunter_score >= 40 %}score-medium{% else %}score-low{% endif %}">
+                                    {{ p.hunter_score }}
                                 </span>
                             </td>
                             <td>
-                                <strong>{{ p.project_name }}</strong><br>
-                                <small class="text-muted">{{ p.customer }}</small>
+                                <div>
+                                    <strong>{{ p.project_name[:50] }}{% if p.project_name|length > 50 %}...{% endif %}</strong>
+                                </div>
+                                <small class="text-muted">{{ p.customer[:40] if p.customer else 'Unknown' }}</small>
                             </td>
-                            <td>{{ "%.0f"|format(p.capacity_mw) }} MW</td>
-                            <td>{{ p.county }}, {{ p.state }}</td>
-                            <td><small>{{ p.hunter_notes }}</small></td>
+                            <td>
+                                <strong>{{ "%.0f"|format(p.capacity_mw) }}</strong> MW
+                            </td>
+                            <td>
+                                {% if 'loudoun' in (p.county or '').lower() or 'ashburn' in (p.county or '').lower() %}
+                                    <span class="hotspot-icon">🔥</span>
+                                {% endif %}
+                                {{ p.county }}, {{ p.state }}
+                            </td>
+                            <td>
+                                <small class="text-muted">{{ p.hunter_notes[:60] if p.hunter_notes else 'No signals' }}</small>
+                            </td>
                         </tr>
                         {% endfor %}
+                        
+                        {% if not top_hunters %}
+                        <tr>
+                            <td colspan="5" class="text-center py-4">
+                                <i class="bi bi-inbox display-4 text-muted d-block mb-2"></i>
+                                <p class="text-muted">No high-confidence projects yet.</p>
+                                <a href="{{ url_for('trigger_monitor') }}" class="btn btn-primary">
+                                    Run Initial Scan
+                                </a>
+                            </td>
+                        </tr>
+                        {% endif %}
                     </tbody>
                 </table>
             </div>
         </div>
     </div>
     
-    <div class="col-md-4">
-        <div class="card shadow-sm">
+    <!-- System Status & Sources -->
+    <div class="col-lg-4">
+        <!-- System Status -->
+        <div class="card mb-4">
             <div class="card-header bg-white">
-                <h5 class="mb-0">📡 System Status</h5>
+                <h5 class="mb-0">
+                    <i class="bi bi-activity text-success"></i>
+                    System Status
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span>System Health</span>
+                    <span class="badge bg-success">Operational</span>
+                </div>
+                <div class="progress progress-thin mb-3">
+                    <div class="progress-bar bg-success" style="width: 100%"></div>
+                </div>
+                
+                {% if logs %}
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span>Last Scan</span>
+                    <span class="text-muted">{{ logs[0].run_date.strftime('%H:%M %p') }}</span>
+                </div>
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span>Projects Found</span>
+                    <strong class="text-primary">{{ logs[0].projects_found }}</strong>
+                </div>
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span>New Stored</span>
+                    <strong class="text-success">{{ logs[0].projects_stored }}</strong>
+                </div>
+                <div class="d-flex justify-content-between align-items-center">
+                    <span>Duration</span>
+                    <span class="text-muted">{{ "%.1f"|format(logs[0].duration_seconds or 0) }}s</span>
+                </div>
+                {% else %}
+                <p class="text-muted text-center mb-0">No scans run yet</p>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Data Sources -->
+        <div class="card">
+            <div class="card-header bg-white">
+                <h5 class="mb-0">
+                    <i class="bi bi-diagram-3"></i>
+                    Data Sources
+                </h5>
             </div>
             <ul class="list-group list-group-flush">
-                {% for log in logs %}
-                <li class="list-group-item d-flex justify-content-between align-items-center">
-                    <div>
-                        <strong>{{ log.iso }}</strong><br>
-                        <small class="text-muted">{{ log.run_date.strftime('%H:%M %p') }}</small>
-                    </div>
-                    <div class="text-end">
-                        {% if log.status == 'Success' %}
-                        <span class="badge bg-success rounded-pill">{{ log.projects_found }} items</span>
-                        {% else %}
-                        <span class="badge bg-danger rounded-pill">Failed</span>
-                        {% endif %}
-                    </div>
-                </li>
-                {% endfor %}
+                {% if source_stats %}
+                    {% for source, count in source_stats.items() %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>{{ source }}</strong>
+                            {% if count > 0 %}
+                                <i class="bi bi-check-circle-fill text-success ms-1"></i>
+                            {% else %}
+                                <i class="bi bi-x-circle-fill text-danger ms-1"></i>
+                            {% endif %}
+                        </div>
+                        <span class="badge bg-{% if count > 0 %}primary{% else %}secondary{% endif %} rounded-pill">
+                            {{ count }} projects
+                        </span>
+                    </li>
+                    {% endfor %}
+                {% else %}
+                    <li class="list-group-item text-center text-muted">
+                        Run a scan to see source status
+                    </li>
+                {% endif %}
             </ul>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="card-title mb-3">Quick Actions</h6>
+                <div class="d-flex flex-wrap gap-2">
+                    <a href="{{ url_for('projects', state='VA') }}" class="btn btn-outline-primary">
+                        <i class="bi bi-geo-alt"></i> Virginia Projects
+                    </a>
+                    <a href="{{ url_for('projects', min_capacity=500) }}" class="btn btn-outline-primary">
+                        <i class="bi bi-lightning"></i> 500+ MW
+                    </a>
+                    <a href="{{ url_for('projects', filter='datacenter') }}" class="btn btn-outline-primary">
+                        <i class="bi bi-server"></i> Data Centers
+                    </a>
+                    <a href="{{ url_for('export_csv', min_score=70) }}" class="btn btn-outline-success">
+                        <i class="bi bi-download"></i> Export High-Confidence
+                    </a>
+                    <a href="{{ url_for('analytics') }}" class="btn btn-outline-info">
+                        <i class="bi bi-graph-up"></i> View Analytics
+                    </a>
+                </div>
+            </div>
         </div>
     </div>
 </div>
