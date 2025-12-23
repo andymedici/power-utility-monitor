@@ -1,68 +1,253 @@
 {% extends "base.html" %}
 
+{% block title %}Projects - Power Utility Monitor{% endblock %}
+
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h2>Project Database</h2>
-    <div class="btn-group">
-        <a href="/projects?filter=all" class="btn btn-outline-secondary {% if filter_type == 'all' %}active{% endif %}">All</a>
-        <a href="/projects?filter=load" class="btn btn-outline-secondary {% if filter_type == 'load' %}active{% endif %}">High Load (>100MW)</a>
-        <a href="/projects?filter=hunter" class="btn btn-outline-danger {% if filter_type == 'hunter' %}active{% endif %}">🎯 Targets Only</a>
+<!-- Page Header -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center">
+            <div>
+                <h2 class="mb-2">
+                    <i class="bi bi-list-ul"></i>
+                    {% if filter_type == 'hunter' %}Priority Targets
+                    {% elif filter_type == 'datacenter' %}Data Centers
+                    {% elif filter_type == 'load' %}High Load Projects
+                    {% else %}All Projects{% endif %}
+                </h2>
+                <p class="text-muted">
+                    Showing {{ pagination.total }} projects
+                    {% if state_filter %} in {{ state_filter }}{% endif %}
+                    {% if min_capacity %} ≥ {{ min_capacity }}MW{% endif %}
+                </p>
+            </div>
+            <div>
+                <a href="{{ url_for('export_csv', min_score=60) }}" class="btn btn-success">
+                    <i class="bi bi-download"></i> Export CSV
+                </a>
+            </div>
+        </div>
     </div>
 </div>
 
-<div class="card shadow-sm">
-    <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
-            <thead class="table-light">
-                <tr>
-                    <th>ISO</th>
-                    <th>Name / ID</th>
-                    <th>Customer</th>
-                    <th>MW</th>
-                    <th>Type/Fuel</th>
-                    <th>Location</th>
-                    <th>Status</th>
-                    <th>Hunter Score</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for p in pagination.items %}
-                <tr>
-                    <td><span class="badge bg-secondary">{{ p.iso }}</span></td>
-                    <td>
-                        <div class="fw-bold">{{ p.project_name }}</div>
-                        <small class="text-muted">{{ p.request_id }}</small>
-                    </td>
-                    <td>{{ p.customer }}</td>
-                    <td>{{ "%.0f"|format(p.capacity_mw) }}</td>
-                    <td>{{ p.fuel_type }}</td>
-                    <td>{{ p.county }}, {{ p.state }}</td>
-                    <td>{{ p.status }}</td>
-                    <td>
-                        {% if p.hunter_score > 0 %}
-                        <div class="progress" style="height: 5px; width: 50px;">
-                            <div class="progress-bar {% if p.hunter_score > 60 %}bg-danger{% else %}bg-warning{% endif %}" role="progressbar" style="width: {{ p.hunter_score }}%"></div>
-                        </div>
-                        <small>{{ p.hunter_score }}%</small>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+<!-- Filters -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="card-title mb-3">Filters</h6>
+                
+                <!-- Filter Pills -->
+                <div class="filter-pills mb-3">
+                    <a href="{{ url_for('projects', filter='all') }}" 
+                       class="btn btn-sm {% if filter_type == 'all' %}btn-primary{% else %}btn-outline-primary{% endif %}">
+                        All Projects
+                    </a>
+                    <a href="{{ url_for('projects', filter='hunter') }}" 
+                       class="btn btn-sm {% if filter_type == 'hunter' %}btn-danger{% else %}btn-outline-danger{% endif %}">
+                        <i class="bi bi-crosshair"></i> Targets (Score ≥60)
+                    </a>
+                    <a href="{{ url_for('projects', filter='datacenter') }}" 
+                       class="btn btn-sm {% if filter_type == 'datacenter' %}btn-info{% else %}btn-outline-info{% endif %}">
+                        <i class="bi bi-server"></i> Data Centers
+                    </a>
+                    <a href="{{ url_for('projects', filter='load') }}" 
+                       class="btn btn-sm {% if filter_type == 'load' %}btn-warning{% else %}btn-outline-warning{% endif %}">
+                        <i class="bi bi-lightning"></i> High Load (≥100MW)
+                    </a>
+                </div>
+                
+                <!-- Search & Filters Form -->
+                <form method="get" class="row g-3">
+                    <input type="hidden" name="filter" value="{{ filter_type }}">
+                    
+                    <div class="col-md-3">
+                        <label class="form-label small">Search</label>
+                        <input type="text" name="search" class="form-control" 
+                               placeholder="Project, customer, county..." value="{{ search or '' }}">
+                    </div>
+                    
+                    <div class="col-md-2">
+                        <label class="form-label small">State</label>
+                        <select name="state" class="form-select">
+                            <option value="">All States</option>
+                            {% for state in states %}
+                            <option value="{{ state }}" {% if state_filter == state %}selected{% endif %}>
+                                {{ state }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <div class="col-md-2">
+                        <label class="form-label small">Min Capacity (MW)</label>
+                        <input type="number" name="min_capacity" class="form-control" 
+                               placeholder="100" value="{{ min_capacity or '' }}">
+                    </div>
+                    
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="bi bi-search"></i> Search
+                        </button>
+                    </div>
+                    
+                    <div class="col-md-2 d-flex align-items-end">
+                        <a href="{{ url_for('projects') }}" class="btn btn-outline-secondary w-100">
+                            <i class="bi bi-x-circle"></i> Clear
+                        </a>
+                    </div>
+                </form>
+            </div>
+        </div>
     </div>
-    <div class="card-footer">
-        <nav>
-            <ul class="pagination justify-content-center mb-0">
-                {% if pagination.has_prev %}
-                <li class="page-item"><a class="page-link" href="{{ url_for('projects', page=pagination.prev_num, filter=filter_type) }}">Previous</a></li>
-                {% endif %}
-                <li class="page-item disabled"><span class="page-link">Page {{ pagination.page }}</span></li>
-                {% if pagination.has_next %}
-                <li class="page-item"><a class="page-link" href="{{ url_for('projects', page=pagination.next_num, filter=filter_type) }}">Next</a></li>
-                {% endif %}
-            </ul>
-        </nav>
+</div>
+
+<!-- Projects Table -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead class="table-light sticky-top">
+                        <tr>
+                            <th style="width: 80px;">Score</th>
+                            <th>Project Name / ID</th>
+                            <th style="width: 120px;">Customer</th>
+                            <th style="width: 80px;">MW</th>
+                            <th style="width: 100px;">Type</th>
+                            <th style="width: 150px;">Location</th>
+                            <th style="width: 100px;">Source</th>
+                            <th style="width: 100px;">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for p in pagination.items %}
+                        <tr onclick="window.location='{{ url_for('project_detail', id=p.id) }}';" style="cursor: pointer;">
+                            <td>
+                                {% if p.hunter_score > 0 %}
+                                <span class="hunter-score-badge {% if p.hunter_score >= 70 %}score-high{% elif p.hunter_score >= 40 %}score-medium{% else %}score-low{% endif %}">
+                                    {{ p.hunter_score }}
+                                </span>
+                                {% else %}
+                                <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div>
+                                    <strong class="text-primary">
+                                        {{ p.project_name[:45] }}{% if p.project_name|length > 45 %}...{% endif %}
+                                    </strong>
+                                </div>
+                                <small class="text-muted">{{ p.request_id }}</small>
+                            </td>
+                            <td>
+                                <small>{{ p.customer[:30] if p.customer else '-' }}</small>
+                            </td>
+                            <td>
+                                <strong>{{ "%.0f"|format(p.capacity_mw) }}</strong>
+                            </td>
+                            <td>
+                                <span class="badge bg-secondary">{{ p.fuel_type or 'Unknown' }}</span>
+                            </td>
+                            <td>
+                                {% if 'loudoun' in (p.county or '').lower() or 'ashburn' in (p.county or '').lower() %}
+                                    <span class="hotspot-icon">🔥</span>
+                                {% endif %}
+                                {{ p.county or '-' }}, {{ p.state or '-' }}
+                            </td>
+                            <td>
+                                <span class="source-badge badge bg-info">{{ p.source }}</span>
+                            </td>
+                            <td>
+                                <small class="text-muted">{{ p.status or 'Active' }}</small>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        
+                        {% if not pagination.items %}
+                        <tr>
+                            <td colspan="8" class="text-center py-5">
+                                <i class="bi bi-search display-4 text-muted d-block mb-3"></i>
+                                <h5 class="text-muted">No projects found</h5>
+                                <p class="text-muted">Try adjusting your filters or run a new scan</p>
+                                <a href="{{ url_for('trigger_monitor') }}" class="btn btn-primary">
+                                    <i class="bi bi-arrow-clockwise"></i> Run Scan
+                                </a>
+                            </td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- Pagination -->
+            {% if pagination.pages > 1 %}
+            <div class="card-footer bg-white">
+                <nav>
+                    <ul class="pagination justify-content-center mb-0">
+                        {% if pagination.has_prev %}
+                        <li class="page-item">
+                            <a class="page-link" href="{{ url_for('projects', page=pagination.prev_num, filter=filter_type, state=state_filter, min_capacity=min_capacity, search=search) }}">
+                                <i class="bi bi-chevron-left"></i> Previous
+                            </a>
+                        </li>
+                        {% endif %}
+                        
+                        <li class="page-item active">
+                            <span class="page-link">
+                                Page {{ pagination.page }} of {{ pagination.pages }}
+                            </span>
+                        </li>
+                        
+                        {% if pagination.has_next %}
+                        <li class="page-item">
+                            <a class="page-link" href="{{ url_for('projects', page=pagination.next_num, filter=filter_type, state=state_filter, min_capacity=min_capacity, search=search) }}">
+                                Next <i class="bi bi-chevron-right"></i>
+                            </a>
+                        </li>
+                        {% endif %}
+                    </ul>
+                </nav>
+                <p class="text-center text-muted small mb-0 mt-2">
+                    Showing {{ (pagination.page - 1) * 50 + 1 }} - {{ min(pagination.page * 50, pagination.total) }} of {{ pagination.total }} projects
+                </p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Quick Stats -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-md-3">
+                        <h4 class="text-primary mb-0">{{ pagination.total }}</h4>
+                        <small class="text-muted">Total Projects</small>
+                    </div>
+                    <div class="col-md-3">
+                        <h4 class="text-danger mb-0">
+                            {{ pagination.items|selectattr('hunter_score', 'ge', 70)|list|length }}
+                        </h4>
+                        <small class="text-muted">High Confidence</small>
+                    </div>
+                    <div class="col-md-3">
+                        <h4 class="text-warning mb-0">
+                            {{ pagination.items|selectattr('hunter_score', 'ge', 40)|selectattr('hunter_score', 'lt', 70)|list|length }}
+                        </h4>
+                        <small class="text-muted">Medium Confidence</small>
+                    </div>
+                    <div class="col-md-3">
+                        <h4 class="text-success mb-0">
+                            {{ "%.0f"|format(pagination.items|sum(attribute='capacity_mw')) }}
+                        </h4>
+                        <small class="text-muted">Total MW (This Page)</small>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}
