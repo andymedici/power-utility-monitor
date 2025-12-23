@@ -137,8 +137,7 @@ class UltraPowerMonitor:
         
         return {
             'hunter_score': min(100, max(0, score)),
-            'hunter_notes': ' | '.join(signals[:3]) if signals else 'No signals',
-            'all_signals': signals
+            'hunter_notes': ' | '.join(signals[:3]) if signals else 'No signals'
         }
     
     @retry_with_backoff(max_retries=2)
