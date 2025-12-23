@@ -442,7 +442,7 @@ def run_full_scan():
 def index():
     # Dashboard Metrics
     total = PowerProject.query.filter_by(is_archived=False).count()
-    suspected_dc = PowerProject.query.filter_by(is_archived=False, hunter_score>=40).count()
+    suspected_dc = PowerProject.query.filter(PowerProject.is_archived == False, PowerProject.hunter_score >= 40).count()
     large_load = PowerProject.query.filter_by(is_archived=False, capacity_mw>=100).count()
     
     # Hunter Top List (Score > 0 to filter out default entries)
@@ -496,3 +496,4 @@ if __name__ == '__main__':
     # The scheduler is now run by the separate 'run_monitor.py' worker process.
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
