@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Analytics - Power Utility Monitor{% endblock %}
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-graph-up"></i> Market Analytics</h2>
+
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card stat-card">
+            <div class="stat-value">{{ score_distribution.high }}</div>
+            <div class="stat-label">High Confidence DCs</div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card">
+            <div class="stat-value text-warning">{{ score_distribution.medium }}</div>
+            <div class="stat-label">Medium Confidence</div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card">
+            <div class="stat-value text-secondary">{{ score_distribution.low }}</div>
+            <div class="stat-label">Low Confidence</div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6 mb-4">
+        <div class="card">
+            <div class="card-header bg-white"><h5>Top States by Project Count</h5></div>
+            <div class="card-body"><canvas id="stateChart"></canvas></div>
+        </div>
+    </div>
+    <div class="col-md-6 mb-4">
+        <div class="card">
+            <div class="card-header bg-white"><h5>Data Center Hotspots</h5></div>
+            <ul class="list-group list-group-flush">
+                {% for hotspot in hotspot_stats[:10] %}
+                <li class="list-group-item d-flex justify-content-between">
+                    <span>{{ hotspot.county }}, {{ hotspot.state }}</span>
+                    <span><strong>{{ hotspot.count }}</strong> projects (avg {{ "%.0f"|format(hotspot.avg_score) }} score)</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header bg-white"><h5>Discovery Timeline (Last 30 Days)</h5></div>
+            <div class="card-body"><canvas id="timelineChart"></canvas></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+new Chart(document.getElementById('stateChart'), {
+    type: 'bar',
+    data: {
+        labels: [{% for s in state_stats %}'{{ s.state }}',{% endfor %}],
+        datasets: [{
+            label: 'Projects',
+            data: [{% for s in state_stats %}{{ s.count }},{% endfor %}],
+            backgroundColor: 'rgba(13, 110, 253, 0.8)'
+        }]
+    }
+});
+
+new Chart(document.getElementById('timelineChart'), {
+    type: 'line',
+    data: {
+        labels: [{% for t in timeline %}'{{ t.date }}',{% endfor %}],
+        datasets: [{
+            label: 'New Projects',
+            data: [{% for t in timeline %}{{ t.count }},{% endfor %}],
+            borderColor: 'rgb(13, 110, 253)',
+            tension: 0.1
+        }]
+    }
+});
+</script>
+{% endblock %}
