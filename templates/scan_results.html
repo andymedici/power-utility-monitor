@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Scan Results{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header bg-success text-white">
+                <h3 class="mb-0"><i class="bi bi-check-circle"></i> Scan Complete</h3>
+            </div>
+            <div class="card-body">
+                {% if result.error %}
+                <div class="alert alert-danger">{{ result.error }}</div>
+                {% else %}
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Sources Checked</dt>
+                    <dd class="col-sm-8">{{ result.sources_checked }}</dd>
+                    <dt class="col-sm-4">Projects Found</dt>
+                    <dd class="col-sm-8"><strong class="text-primary">{{ result.projects_found }}</strong></dd>
+                    <dt class="col-sm-4">New Stored</dt>
+                    <dd class="col-sm-8"><strong class="text-success">{{ result.projects_stored }}</strong></dd>
+                    <dt class="col-sm-4">Duration</dt>
+                    <dd class="col-sm-8">{{ result.duration_seconds }}s</dd>
+                </dl>
+                <hr>
+                <h5>By Source:</h5>
+                <ul class="list-group">
+                    {% for source, count in result.by_source.items() %}
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>{{ source }}</span>
+                        <span class="badge bg-primary">{{ count }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+            </div>
+            <div class="card-footer bg-white text-center">
+                <a href="{{ url_for('index') }}" class="btn btn-primary">Dashboard</a>
+                <a href="{{ url_for('projects', filter='hunter') }}" class="btn btn-success">View Targets</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
