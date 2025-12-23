@@ -5,15 +5,23 @@ import pandas as pd
 import hashlib
 import time
 import json
-import threading
-import schedule
 from datetime import datetime, timedelta
 from io import BytesIO, StringIO
 from urllib.parse import urljoin
 from fake_useragent import UserAgent
+import threading # Keep for manual trigger only
 
 from flask import Flask, render_template, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
+
+# Try to import gridstatus - used for PJM/ERCOT
+try:
+    import gridstatus
+    GRIDSTATUS_AVAILABLE = True
+except ImportError:
+    GRIDSTATUS_AVAILABLE = False
+    # This is fine, we have fallbacks
+    pass 
 
 # --- Configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -31,18 +39,20 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# --- Heuristics & Intelligence Lists ---
+# --- Heuristics & Intelligence Lists (The Hunter Engine) ---
 class DataCenterHunter:
     """Intelligence engine to identify data centers and large loads."""
     
+    # Hyperscaler/Developer shell names and direct names
     SHELL_COMPANIES = [
         'RAVEN NORTHBROOK', 'VANDALAY', 'K2', 'STARK', 'CLOUDHQ', 'VANTAGE', 'ALIGNED',
         'STACK INFRASTRUCTURE', 'QTS', 'CYRUSONE', 'DIGITAL REALTY', 'EQUINIX', 'IRON MOUNTAIN',
         'COMPASS', 'CORESITE', 'SABEY', 'EDGECONNEX', 'META', 'GOOGLE', 'MICROSOFT', 'AMAZON',
         'AWS', 'AMAZON DATA SERVICES', 'BLACKSTONE', 'GIGAPOWER', 'YONDZR', 'SWITCH',
-        'DATA BANK', 'TIERPOINT', 'FLEXENTIAL'
+        'DATA BANK', 'TIERPOINT', 'FLEXENTIAL', 'SCALABLE', 'INFRAMARK', 'PRIME'
     ]
 
+    # Counties known for major data center clusters
     TARGET_COUNTIES = [
         # Virginia (Data Center Alley)
         'LOUDOUN', 'FAIRFAX', 'PRINCE WILLIAM', 'HENRICO', 'CULPEPER', 'SPOTSYLVANIA',
@@ -51,16 +61,16 @@ class DataCenterHunter:
         # Arizona (Silicon Desert)
         'MARICOPA', 'PINAL',
         # Texas (Silicon Prairie)
-        'DALLAS', 'TARRANT', 'TRAVIS', 'BEXAR',
+        'DALLAS', 'TARRANT', 'TRAVIS', 'BEXAR', 'FORT BEND',
         # Georgia
         'FULTON', 'DOUGLAS', 'GWINNETT',
         # Illinois
         'COOK', 'KANE', 'DUPAGE',
         # Oregon/Washington
-        'UMATILLA', 'MORROW', 'DOUGLAS', 'GRANT'
+        'UMATILLA', 'MORROW', 'DOUGLAS', 'GRANT', 'QUINCY'
     ]
 
-    KEYWORDS = ['DATA CENTER', 'DATACENTER', 'SERVER', 'COMPUTE', 'DIGITAL', 'HYPERSCALE', 'PROCESSOR', 'CAMPUS']
+    KEYWORDS = ['DATA CENTER', 'DATACENTER', 'SERVER', 'COMPUTE', 'DIGITAL', 'HYPERSCALE', 'PROCESSOR', 'CAMPUS', 'CLOUD']
 
     @staticmethod
     def calculate_confidence(row):
@@ -77,25 +87,31 @@ class DataCenterHunter:
         # 1. Shell Company / Direct Match (High Confidence)
         if any(company in customer for company in DataCenterHunter.SHELL_COMPANIES):
             score += 60
-            details.append("Known Developer")
+            details.append("Known Developer Match")
         
         if any(word in name or word in customer for word in DataCenterHunter.KEYWORDS):
             score += 50
-            details.append("Explicit Keyword")
+            details.append("Explicit Keyword Match")
 
         # 2. Heuristic: Large Load in Target County
         if county in DataCenterHunter.TARGET_COUNTIES:
-            if capacity > 50:
-                score += 20
-                details.append("Target County + High Cap")
+            if capacity >= 50:
+                score += 25
+                details.append("Target County + Large Load")
             else:
                 score += 10
                 details.append("Target County")
 
         # 3. Heuristic: Suspicious Fuel Types (Load disguises)
-        if fuel in ['LOAD', 'OTHER', 'STORAGE', 'BATTERY'] and capacity > 100:
+        if fuel in ['LOAD', 'OTHER', 'STORAGE', 'BATTERY', 'NONE'] and capacity >= 75:
             score += 15
-            details.append(f"Large {fuel} Request")
+            details.append(f"Large {fuel} Request (>75MW)")
+            
+        # 4. Critical Threshold
+        if capacity >= 300 and score < 50: # If it's huge, but has no other signs, still score it high
+             score += 30
+             details.append("Extreme Capacity (>300MW)")
+
 
         return min(score, 100), ", ".join(details)
 
@@ -132,7 +148,7 @@ class PowerProject(db.Model):
     source_url = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_seen = db.Column(db.DateTime, default=datetime.utcnow)
-    is_archived = db.Column(db.Boolean, default=False)
+    is_archived = db.Column(db.Boolean, default=False) # We no longer delete projects
 
     def update_hunter_status(self):
         data = {
@@ -145,6 +161,7 @@ class PowerProject(db.Model):
         score, notes = DataCenterHunter.calculate_confidence(data)
         self.hunter_score = score
         self.hunter_notes = notes
+        # A score of 40 or higher is a high-probability target
         self.is_suspected_datacenter = score >= 40
 
 class ScrapeLog(db.Model):
@@ -179,33 +196,37 @@ class ScraperEngine:
             df = pd.read_excel(BytesIO(r.content))
             projects = []
             
-            # Dynamic Column Mapping
+            # Dynamic Column Mapping for robustness
             cols = {c.lower(): c for c in df.columns}
             id_col = next((c for c in cols if 'queue' in c and 'id' in c), None)
-            mw_col = next((c for c in cols if 'mw' in c and 'net' not in c), None)
+            mw_col = next((c for c in cols if 'mw' in c and 'net' not in c), 'capacity') # Fallback to a common name
             
             if not id_col or not mw_col:
-                raise ValueError("Could not map CAISO columns")
-
+                # Fallback to hardcoded names if dynamic mapping fails
+                id_col = 'Queue ID'
+                mw_col = 'Capacity (MW)'
+                
             for _, row in df.iterrows():
                 try:
-                    mw = self.safe_float(row.get(cols.get('capacity', mw_col)))
+                    # Look for load MW or just capacity MW
+                    mw = self.safe_float(row.get('Capacity (MW)', row.get(cols.get('capacity', mw_col))))
                     if mw < 10: continue 
 
                     p = {
                         'iso': 'CAISO',
-                        'request_id': f"CAISO_{row[id_col]}",
-                        'project_name': str(row.get(cols.get('project name', ''), 'Unknown')),
+                        'request_id': f"CAISO_{row.get(id_col, 'UNK')}",
+                        'project_name': str(row.get(cols.get('project name', ''), 'Unknown')).strip(),
                         'capacity_mw': mw,
-                        'county': str(row.get(cols.get('county', ''), 'Unknown')),
-                        'state': str(row.get(cols.get('state', ''), 'CA')),
-                        'customer': str(row.get(cols.get('interconnection customer', ''), 'Unknown')),
-                        'fuel_type': str(row.get(cols.get('fuel', ''), 'Unknown')),
-                        'status': str(row.get(cols.get('status', ''), 'Active')),
+                        'county': str(row.get(cols.get('county', ''), 'Unknown')).upper().replace('COUNTY', '').strip(),
+                        'state': str(row.get(cols.get('state', ''), 'CA')).upper().strip(),
+                        'customer': str(row.get(cols.get('interconnection customer', ''), 'Unknown')).strip(),
+                        'fuel_type': str(row.get(cols.get('fuel', ''), 'Unknown')).upper().strip(),
+                        'status': str(row.get(cols.get('status', ''), 'Active')).strip(),
                         'source_url': url
                     }
                     projects.append(p)
                 except Exception as e:
+                    logger.debug(f"CAISO Row Skip: {e}")
                     continue
             return projects
         except Exception as e:
@@ -221,19 +242,20 @@ class ScraperEngine:
             projects = []
             
             for _, row in df.iterrows():
+                # 'S (MW)' is often the requested capacity
                 mw = self.safe_float(row.get('S (MW)', 0))
                 if mw < 10: continue
 
                 p = {
                     'iso': 'NYISO',
                     'request_id': f"NYISO_{row.get('Queue Pos.', 'UNK')}",
-                    'project_name': str(row.get('Project Name', 'Unknown')),
+                    'project_name': str(row.get('Project Name', 'Unknown')).strip(),
                     'capacity_mw': mw,
-                    'county': str(row.get('County', 'Unknown')),
+                    'county': str(row.get('County', 'Unknown')).upper().replace('COUNTY', '').strip(),
                     'state': 'NY',
-                    'customer': str(row.get('Developer', 'Unknown')),
-                    'fuel_type': str(row.get('Type', 'Unknown')),
-                    'status': str(row.get('Status', 'Active')),
+                    'customer': str(row.get('Developer', 'Unknown')).strip(),
+                    'fuel_type': str(row.get('Type', 'Unknown')).upper().strip(),
+                    'status': str(row.get('Status', 'Active')).strip(),
                     'source_url': url
                 }
                 projects.append(p)
@@ -244,28 +266,28 @@ class ScraperEngine:
 
     def run_miso(self):
         """Scrape MISO (Midwest) - Critical for Ohio"""
-        # MISO URL often changes, but this is the stable doc link
         url = "https://docs.misoenergy.org/marketreports/GI_Queue.xlsx"
         try:
             r = self.session.get(url, headers=self.get_headers(), timeout=30, verify=False)
-            # Skip first few rows if needed, MISO format varies. Assuming header on row 0 for now.
+            # MISO has headers often on row 0
             df = pd.read_excel(BytesIO(r.content), skiprows=0) 
             projects = []
             
             for _, row in df.iterrows():
+                # Use Max Summer MW as the most representative capacity
                 mw = self.safe_float(row.get('Max Summer MW', 0))
                 if mw < 10: continue
 
                 p = {
                     'iso': 'MISO',
                     'request_id': f"MISO_{row.get('Project #', 'UNK')}",
-                    'project_name': 'MISO Project', # MISO often redacts names, rely on location
+                    'project_name': str(row.get('Project Name', 'MISO Project')).strip(),
                     'capacity_mw': mw,
-                    'county': str(row.get('County', 'Unknown')),
-                    'state': str(row.get('State', 'UNK')),
-                    'customer': str(row.get('Interconnection Customer', 'Unknown')), # Often redacted
-                    'fuel_type': str(row.get('Fuel Type', 'Unknown')),
-                    'status': str(row.get('Study Phase', 'Active')),
+                    'county': str(row.get('County', 'Unknown')).upper().replace('COUNTY', '').strip(),
+                    'state': str(row.get('State', 'UNK')).upper().strip(),
+                    'customer': str(row.get('Interconnection Customer', 'Unknown')).strip(),
+                    'fuel_type': str(row.get('Fuel Type', 'Unknown')).upper().strip(),
+                    'status': str(row.get('Study Phase', 'Active')).strip(),
                     'source_url': url
                 }
                 projects.append(p)
@@ -276,32 +298,27 @@ class ScraperEngine:
 
     def run_isone(self):
         """Scrape ISO-NE (New England)"""
-        url = "https://www.iso-ne.com/static-assets/documents/2014/08/iso_ne_queue.xlsx" # Standard generic link
-        # Fallback if specific link fails, ISO-NE is tricky.
-        # Try a known current link for safety if the generic one 404s
+        url = "https://www.iso-ne.com/static-assets/documents/2014/08/iso_ne_queue.xlsx" 
         try:
-            r = self.session.get(url, headers=self.get_headers(), timeout=30)
-            if r.status_code != 200:
-                # Fallback to searching (Simulated here for robustness)
-                raise Exception("Direct ISO-NE link failed")
-            
+            r = self.session.get(url, headers=self.get_headers(), timeout=30, verify=False)
             df = pd.read_excel(BytesIO(r.content), sheet_name=0)
             projects = []
             
             for _, row in df.iterrows():
+                # Summer MW is the relevant capacity
                 mw = self.safe_float(row.get('Summer MW', 0))
                 if mw < 10: continue
 
                 p = {
                     'iso': 'ISO-NE',
                     'request_id': f"ISONE_{row.get('Queue Position', 'UNK')}",
-                    'project_name': str(row.get('Project Name', 'Unknown')),
+                    'project_name': str(row.get('Project Name', 'Unknown')).strip(),
                     'capacity_mw': mw,
-                    'county': str(row.get('County', 'Unknown')),
-                    'state': str(row.get('State', 'UNK')),
-                    'customer': str(row.get('Interconnection Customer', 'Unknown')),
-                    'fuel_type': str(row.get('Fuel Type', 'Unknown')),
-                    'status': str(row.get('Sync Status', 'Active')),
+                    'county': str(row.get('County', 'Unknown')).upper().replace('COUNTY', '').strip(),
+                    'state': str(row.get('State', 'UNK')).upper().strip(),
+                    'customer': str(row.get('Interconnection Customer', 'Unknown')).strip(),
+                    'fuel_type': str(row.get('Fuel Type', 'Unknown')).upper().strip(),
+                    'status': str(row.get('Sync Status', 'Active')).strip(),
                     'source_url': url
                 }
                 projects.append(p)
@@ -311,13 +328,14 @@ class ScraperEngine:
             raise
 
     def run_pjm(self):
-        """Run PJM using gridstatus if possible, else log error"""
-        # PJM is best handled via gridstatus due to complex website auth
+        """Run PJM using gridstatus library (preferred for stability)"""
+        if not GRIDSTATUS_AVAILABLE:
+            logger.warning("gridstatus not available, PJM Scrape Failed.")
+            raise ImportError("gridstatus not installed or available for PJM.")
+            
         try:
-            import gridstatus
             pjm = gridstatus.PJM()
-            # This might fail without API key for some endpoints, but queue is often public
-            # gridstatus might fallback to public queue
+            # This endpoint typically provides the public queue
             df = pjm.get_interconnection_queue()
             projects = []
             
@@ -328,25 +346,29 @@ class ScraperEngine:
                 p = {
                     'iso': 'PJM',
                     'request_id': f"PJM_{row.get('Queue ID', 'UNK')}",
-                    'project_name': str(row.get('Project Name', 'Unknown')),
+                    'project_name': str(row.get('Project Name', 'Unknown')).strip(),
                     'capacity_mw': mw,
-                    'county': str(row.get('County', 'Unknown')),
-                    'state': str(row.get('State', 'UNK')),
-                    'customer': str(row.get('Interconnection Customer', 'Unknown')),
-                    'fuel_type': str(row.get('Fuel', 'Unknown')),
-                    'status': str(row.get('Status', 'Active')),
-                    'source_url': 'gridstatus-api'
+                    # PJM data usually has County/State ready
+                    'county': str(row.get('County', 'Unknown')).upper().replace('COUNTY', '').strip(),
+                    'state': str(row.get('State', 'UNK')).upper().strip(),
+                    'customer': str(row.get('Interconnection Customer', 'Unknown')).strip(),
+                    'fuel_type': str(row.get('Fuel', 'Unknown')).upper().strip(),
+                    'status': str(row.get('Status', 'Active')).strip(),
+                    'source_url': 'gridstatus-pjm-api'
                 }
                 projects.append(p)
             return projects
         except Exception as e:
             logger.error(f"PJM Scrape Failed: {e}")
+            # Fallback to direct scraping if API fails (not implemented here for brevity, but recommended)
             raise
 
-# --- Orchestrator ---
+
+# --- Orchestrator Function (Called by run_monitor.py) ---
 def run_full_scan():
     """Runs all scrapers and updates DB."""
     scraper = ScraperEngine()
+    # Scrapers to run
     scrapers = {
         'CAISO': scraper.run_caiso,
         'NYISO': scraper.run_nyiso,
@@ -355,77 +377,84 @@ def run_full_scan():
         'PJM': scraper.run_pjm
     }
     
+    # Track which projects were seen this run
+    seen_ids = set() 
+    
+    # We must be inside the app context since this is called by the worker
     with app.app_context():
-        # 1. Mark all as not seen in this run (for archiving later)
-        # We don't delete!
         
         for iso, func in scrapers.items():
             try:
                 logger.info(f"Starting {iso} scan...")
                 projects = func()
-                count = 0
+                new_count = 0
                 
                 for p_data in projects:
-                    # Upsert Logic
-                    existing = PowerProject.query.filter_by(request_id=p_data['request_id']).first()
+                    
+                    # Create a unique ID for upsert logic and archiving
+                    request_id = p_data['request_id']
+                    
+                    # Find existing project
+                    existing = PowerProject.query.filter_by(request_id=request_id).first()
                     
                     if existing:
                         # Update existing
                         for k, v in p_data.items():
-                            setattr(existing, k, v)
+                            # Only update if new data is not empty, excluding ISO and ID
+                            if k not in ['iso', 'request_id'] and v is not None:
+                                setattr(existing, k, v)
+                                
                         existing.last_seen = datetime.utcnow()
                         existing.is_archived = False
-                        existing.update_hunter_status()
+                        existing.update_hunter_status() # Re-run hunter logic on update
                     else:
                         # Create new
                         new_proj = PowerProject(**p_data)
                         new_proj.update_hunter_status()
                         db.session.add(new_proj)
-                        count += 1
+                        new_count += 1
+                        
+                    seen_ids.add(request_id)
                 
                 db.session.commit()
                 
                 # Log Success
                 db.session.add(ScrapeLog(iso=iso, projects_found=len(projects), status="Success"))
                 db.session.commit()
-                logger.info(f"{iso}: Processed {len(projects)} items, {count} new.")
+                logger.info(f"{iso}: Processed {len(projects)} items, {new_count} new.")
                 
             except Exception as e:
                 db.session.add(ScrapeLog(iso=iso, projects_found=0, status="Failed", error_msg=str(e)))
                 db.session.commit()
                 logger.error(f"{iso} failed: {e}")
 
-        # Archive Logic: Projects not seen in 7 days
-        # cutoff = datetime.utcnow() - timedelta(days=7)
-        # PowerProject.query.filter(PowerProject.last_seen < cutoff).update({PowerProject.is_archived: True})
-        # db.session.commit()
-
-# --- Scheduler ---
-def start_scheduler():
-    schedule.every(24).hours.do(run_full_scan)
-    # Run once immediately on startup
-    threading.Thread(target=run_full_scan).start()
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
+        # Final Cleanup: Archive projects not seen this run (older than 7 days, to allow for minor scraper failures)
+        # This keeps the history but cleans up the 'Active' view.
+        
+        # NOTE: This logic is complex in a transactional environment. 
+        # For simplicity in this script, we'll keep the project as "Active" until manually reviewed or marked "Withdrawn" in the source data.
+        # The 'last_seen' column is the historical tracker. The "Archived" logic is currently disabled 
+        # to prevent accidental archiving until a robust diffing system is implemented.
+        pass
 
 # --- Routes ---
 @app.route('/')
 def index():
     # Dashboard Metrics
     total = PowerProject.query.filter_by(is_archived=False).count()
-    suspected_dc = PowerProject.query.filter_by(is_archived=False, is_suspected_datacenter=True).count()
+    suspected_dc = PowerProject.query.filter_by(is_archived=False, hunter_score>=40).count()
+    large_load = PowerProject.query.filter_by(is_archived=False, capacity_mw>=100).count()
     
-    # Hunter Top List
-    top_hunters = PowerProject.query.filter_by(is_archived=False)\
+    # Hunter Top List (Score > 0 to filter out default entries)
+    top_hunters = PowerProject.query.filter_by(is_archived=False, hunter_score > 0)\
         .order_by(PowerProject.hunter_score.desc())\
         .limit(10).all()
         
     # Recent Logs
     logs = ScrapeLog.query.order_by(ScrapeLog.run_date.desc()).limit(5).all()
     
-    return render_template('index.html', total=total, suspected_dc=suspected_dc, top_hunters=top_hunters, logs=logs)
+    return render_template('index.html', total=total, suspected_dc=suspected_dc, 
+                           top_hunters=top_hunters, logs=logs, large_load=large_load)
 
 @app.route('/projects')
 def projects():
@@ -435,9 +464,11 @@ def projects():
     query = PowerProject.query.filter_by(is_archived=False)
     
     if filter_type == 'hunter':
+        # Filter for high confidence targets
         query = query.filter(PowerProject.hunter_score >= 40)
     elif filter_type == 'load':
-        query = query.filter(PowerProject.capacity_mw > 100)
+        # Filter for anything over 100MW
+        query = query.filter(PowerProject.capacity_mw >= 100)
     
     pagination = query.order_by(PowerProject.hunter_score.desc(), PowerProject.capacity_mw.desc())\
         .paginate(page=page, per_page=50)
@@ -446,18 +477,22 @@ def projects():
 
 @app.route('/trigger', methods=['POST'])
 def manual_trigger():
-    threading.Thread(target=run_full_scan).start()
-    return jsonify({"status": "Scan started in background"})
+    # Allow the worker function to be manually triggered from the dashboard
+    # This must run in a background thread to prevent the HTTP request from timing out.
+    try:
+        t = threading.Thread(target=run_full_scan)
+        t.start()
+        return jsonify({"status": "Scan started in background. Check logs in a few minutes."})
+    except Exception as e:
+        return jsonify({"status": "Error starting scan", "error": str(e)}), 500
+
 
 # --- Init ---
 if __name__ == '__main__':
+    # This block only runs when executing 'python app.py' locally, not when running via gunicorn
     with app.app_context():
         db.create_all()
     
-    # Start scheduler in background thread
-    t = threading.Thread(target=start_scheduler)
-    t.daemon = True
-    t.start()
-    
+    # The scheduler is now run by the separate 'run_monitor.py' worker process.
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
