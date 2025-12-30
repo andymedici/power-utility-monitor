@@ -1,121 +1,132 @@
 {% extends "base.html" %}
-{% block title %}{{ project.project_name }} - Project Details{% endblock %}
+{% block title %}{{ project.project_name[:50] }} - Power Monitor{% endblock %}
+
 {% block content %}
-<div class="row mb-4">
-    <div class="col-12">
-        <nav aria-label="breadcrumb">
-            <ol class="breadcrumb">
-                <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Dashboard</a></li>
-                <li class="breadcrumb-item"><a href="{{ url_for('projects') }}">Projects</a></li>
-                <li class="breadcrumb-item active">{{ project.request_id }}</li>
-            </ol>
-        </nav>
-    </div>
+<!-- Back Button -->
+<div class="mb-4">
+    <a href="{{ url_for('projects') }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left"></i> Back to Projects
+    </a>
 </div>
 
 <div class="row">
-    <div class="col-lg-8">
-        <div class="card mb-4">
-            <div class="card-header bg-white">
-                <div class="d-flex justify-content-between align-items-start">
-                    <h3 class="mb-0">{{ project.project_name }}</h3>
-                    <span class="hunter-score-badge {% if project.hunter_score >= 70 %}score-high{% elif project.hunter_score >= 40 %}score-medium{% else %}score-low{% endif %}">
-                        Score: {{ project.hunter_score }}
-                    </span>
-                </div>
-            </div>
-            <div class="card-body">
-                <dl class="row">
-                    <dt class="col-sm-3">Request ID</dt>
-                    <dd class="col-sm-9"><code>{{ project.request_id }}</code></dd>
-                    
-                    <dt class="col-sm-3">Capacity</dt>
-                    <dd class="col-sm-9"><strong class="text-primary">{{ "%.2f"|format(project.capacity_mw) }} MW</strong></dd>
-                    
-                    <dt class="col-sm-3">Customer</dt>
-                    <dd class="col-sm-9">{{ project.customer or 'Unknown' }}</dd>
-                    
-                    <dt class="col-sm-3">Location</dt>
-                    <dd class="col-sm-9">
-                        {{ project.county or 'Unknown' }}, {{ project.state or 'Unknown' }}
-                        {% if 'loudoun' in (project.county or '').lower() %}
-                            <span class="badge bg-danger">DC Hotspot</span>
-                        {% endif %}
-                    </dd>
-                    
-                    <dt class="col-sm-3">Utility/ISO</dt>
-                    <dd class="col-sm-9">{{ project.utility or project.source }}</dd>
-                    
-                    <dt class="col-sm-3">Fuel Type</dt>
-                    <dd class="col-sm-9"><span class="badge bg-secondary">{{ project.fuel_type or 'Unknown' }}</span></dd>
-                    
-                    <dt class="col-sm-3">Status</dt>
-                    <dd class="col-sm-9"><span class="badge bg-success">{{ project.status or 'Active' }}</span></dd>
-                    
-                    <dt class="col-sm-3">Data Source</dt>
-                    <dd class="col-sm-9">
-                        <span class="source-badge badge bg-info">{{ project.source }}</span>
-                        {% if project.source_url %}
-                        <a href="{{ project.source_url }}" target="_blank" class="btn btn-sm btn-outline-primary ms-2">
-                            <i class="bi bi-box-arrow-up-right"></i> View Source
-                        </a>
-                        {% endif %}
-                    </dd>
-                    
-                    <dt class="col-sm-3">Added Date</dt>
-                    <dd class="col-sm-9">{{ project.created_at.strftime('%B %d, %Y at %I:%M %p') if project.created_at else 'Unknown' }}</dd>
-                </dl>
-            </div>
-        </div>
-        
+    <!-- Main Info -->
+    <div class="col-md-8 mb-4">
         <div class="card">
-            <div class="card-header bg-white">
-                <h5 class="mb-0">Detection Signals</h5>
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h4 class="mb-0">{{ project.project_name }}</h4>
+                {% if project.hunter_score > 0 %}
+                <span class="hunter-score-badge {% if project.hunter_score >= 70 %}score-high{% elif project.hunter_score >= 40 %}score-medium{% else %}score-low{% endif %}" style="font-size: 1.2rem; padding: 10px 15px;">
+                    {{ project.hunter_score }}
+                </span>
+                {% endif %}
             </div>
             <div class="card-body">
-                <p class="mb-2"><strong>Hunter Notes:</strong></p>
-                <p class="text-muted">{{ project.hunter_notes or 'No detection signals available' }}</p>
+                <table class="table table-borderless">
+                    <tr>
+                        <th style="width: 150px;">Request ID</th>
+                        <td><code>{{ project.request_id }}</code></td>
+                    </tr>
+                    <tr>
+                        <th>Capacity</th>
+                        <td><strong class="text-primary" style="font-size: 1.5rem;">{{ "%.0f"|format(project.capacity_mw) }} MW</strong></td>
+                    </tr>
+                    <tr>
+                        <th>Customer</th>
+                        <td>{{ project.customer or 'Not specified' }}</td>
+                    </tr>
+                    <tr>
+                        <th>Location</th>
+                        <td>
+                            {% if project.county %}{{ project.county }}, {% endif %}{{ project.state or 'Unknown' }}
+                            {% if 'loudoun' in (project.county or '').lower() %}
+                            <span class="badge bg-danger ms-2">🔥 DC Hotspot</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Project Type</th>
+                        <td>
+                            <span class="badge bg-info">{{ project.project_type or 'other' }}</span>
+                            {% if project.fuel_type %}
+                            <span class="badge bg-secondary ms-1">{{ project.fuel_type }}</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Status</th>
+                        <td>{{ project.status or 'Active' }}</td>
+                    </tr>
+                </table>
             </div>
         </div>
     </div>
     
-    <div class="col-lg-4">
+    <!-- Side Panel -->
+    <div class="col-md-4 mb-4">
         <div class="card mb-4">
             <div class="card-header bg-white">
-                <h5 class="mb-0">Actions</h5>
+                <h5 class="mb-0"><i class="bi bi-info-circle"></i> Source Info</h5>
             </div>
             <div class="card-body">
-                <div class="d-grid gap-2">
-                    <a href="{{ url_for('projects', state=project.state) }}" class="btn btn-outline-primary">
-                        <i class="bi bi-geo-alt"></i> More in {{ project.state }}
-                    </a>
-                    <a href="{{ url_for('export_csv', min_score=project.hunter_score) }}" class="btn btn-outline-success">
-                        <i class="bi bi-download"></i> Export Similar
-                    </a>
-                </div>
+                <p>
+                    <strong>ISO/RTO:</strong><br>
+                    <span class="utility-badge utility-{{ project.utility }}">{{ project.utility }}</span>
+                </p>
+                <p>
+                    <strong>Source:</strong><br>
+                    {{ project.source }}
+                </p>
+                <p>
+                    <strong>First Seen:</strong><br>
+                    {{ project.first_seen }}
+                </p>
+                <p>
+                    <strong>Last Updated:</strong><br>
+                    {{ project.last_updated }}
+                </p>
             </div>
         </div>
         
-        {% if similar %}
-        <div class="card">
-            <div class="card-header bg-white">
-                <h5 class="mb-0">Similar Projects</h5>
+        {% if project.hunter_score >= 40 %}
+        <div class="card border-warning">
+            <div class="card-header bg-warning text-dark">
+                <h5 class="mb-0"><i class="bi bi-lightning-charge"></i> Why This Score?</h5>
             </div>
-            <ul class="list-group list-group-flush">
-                {% for sim in similar %}
-                <li class="list-group-item">
-                    <a href="{{ url_for('project_detail', id=sim.id) }}" class="text-decoration-none">
-                        <div class="d-flex justify-content-between">
-                            <strong>{{ sim.project_name[:30] }}...</strong>
-                            <span class="badge bg-primary">{{ sim.hunter_score }}</span>
-                        </div>
-                        <small class="text-muted">{{ "%.0f"|format(sim.capacity_mw) }} MW | {{ sim.county }}, {{ sim.state }}</small>
-                    </a>
-                </li>
-                {% endfor %}
-            </ul>
+            <div class="card-body">
+                <ul class="mb-0">
+                    {% if 'data center' in (project.project_name or '').lower() or 'datacenter' in (project.project_name or '').lower() %}
+                    <li>Contains "data center" in name (+40)</li>
+                    {% endif %}
+                    {% if 'microsoft' in (project.customer or '').lower() or 'amazon' in (project.customer or '').lower() or 'google' in (project.customer or '').lower() %}
+                    <li>Major tech company customer (+35)</li>
+                    {% endif %}
+                    {% if 'loudoun' in (project.county or '').lower() %}
+                    <li>Loudoun County, VA (DC hotspot) (+15)</li>
+                    {% endif %}
+                    {% if project.capacity_mw >= 500 %}
+                    <li>Very high capacity (500+ MW) (+10)</li>
+                    {% elif project.capacity_mw >= 200 %}
+                    <li>High capacity (200+ MW) (+5)</li>
+                    {% endif %}
+                </ul>
+            </div>
         </div>
         {% endif %}
+    </div>
+</div>
+
+<!-- Similar Projects -->
+<div class="card">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-collection"></i> Similar Projects in {{ project.state or 'Area' }}</h5>
+    </div>
+    <div class="card-body">
+        <p class="text-muted">
+            <a href="{{ url_for('projects', state=project.state) }}" class="btn btn-outline-primary btn-sm">
+                View all projects in {{ project.state or 'this state' }} →
+            </a>
+        </p>
     </div>
 </div>
 {% endblock %}
