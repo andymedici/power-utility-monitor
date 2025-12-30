@@ -1,103 +1,236 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Power Monitor Dashboard</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        h1 { color: #333; margin-bottom: 20px; }
-        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 30px; }
-        .card { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .card h2 { color: #666; font-size: 14px; text-transform: uppercase; margin-bottom: 10px; }
-        .card .number { font-size: 36px; font-weight: bold; color: #2196F3; }
-        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
-        th { background: #f9f9f9; font-weight: 600; }
-        tr:hover { background: #f5f5f5; }
-        .btn { background: #2196F3; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
-        .btn:hover { background: #1976D2; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>⚡ Power Monitor Dashboard</h1>
-        
-        <div class="stats">
-            <div class="card">
-                <h2>Total Projects</h2>
-                <div class="number">{{ total }}</div>
+{% extends "base.html" %}
+{% block title %}Dashboard - Power Monitor{% endblock %}
+
+{% block content %}
+<!-- Header -->
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="mb-1"><i class="bi bi-speedometer2"></i> Dashboard</h2>
+        <p class="text-muted mb-0">US Power Interconnection Queue Monitor</p>
+    </div>
+    <div>
+        <a href="{{ url_for('trigger_monitor') }}" class="btn btn-primary">
+            <i class="bi bi-arrow-clockwise"></i> Sync Now
+        </a>
+        <a href="{{ url_for('export_csv', min_score=60) }}" class="btn btn-success">
+            <i class="bi bi-download"></i> Export
+        </a>
+    </div>
+</div>
+
+<!-- Stats Cards -->
+<div class="row mb-4">
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-value">{{ "{:,}".format(total) }}</div>
+            <div class="stat-label">Total Projects</div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-value text-success">{{ "{:,.0f}".format(total_mw) }}</div>
+            <div class="stat-label">Total MW</div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-value text-danger">{{ high_score }}</div>
+            <div class="stat-label">High-Confidence DCs</div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-value">{{ by_utility|length }}</div>
+            <div class="stat-label">Active ISOs</div>
+        </div>
+    </div>
+</div>
+
+<!-- Charts Row -->
+<div class="row mb-4">
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-pie-chart"></i> Projects by ISO/RTO</h5>
             </div>
-            <div class="card">
-                <h2>Active ISOs</h2>
-                <div class="number">{{ by_utility|length }}</div>
+            <div class="card-body">
+                <canvas id="utilityChart" height="250"></canvas>
             </div>
         </div>
-        
-        <div class="card" style="margin-bottom: 20px;">
-            <h2>Projects by ISO/RTO</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Utility</th>
-                        <th>Projects</th>
-                        <th>Total MW</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for row in by_utility %}
-                    <tr>
-                        <td>{{ row.utility }}</td>
-                        <td>{{ row.count }}</td>
-                        <td>{{ "{:,.0f}".format(row.total_mw or 0) }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+    </div>
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-bar-chart"></i> Projects by Type</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="typeChart" height="250"></canvas>
+            </div>
         </div>
-        
-        <div class="card" style="margin-bottom: 20px;">
-            <h2>Projects by Type</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Type</th>
-                        <th>Count</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for row in by_type %}
-                    <tr>
-                        <td>{{ row.project_type }}</td>
-                        <td>{{ row.count }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        
+    </div>
+</div>
+
+<!-- Data Tables Row -->
+<div class="row">
+    <div class="col-md-6 mb-4">
         <div class="card">
-            <h2>Actions</h2>
-            <button class="btn" onclick="triggerSync()">🔄 Trigger Sync</button>
-            <span id="sync-status" style="margin-left: 10px;"></span>
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-building"></i> ISO/RTO Breakdown</h5>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Utility</th>
+                            <th class="text-end">Projects</th>
+                            <th class="text-end">Total MW</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in by_utility %}
+                        <tr>
+                            <td>
+                                <span class="utility-badge utility-{{ row.utility }}">{{ row.utility }}</span>
+                            </td>
+                            <td class="text-end">{{ "{:,}".format(row.count) }}</td>
+                            <td class="text-end">{{ "{:,.0f}".format(row.total_mw or 0) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
     
-    <script>
-        async function triggerSync() {
-            document.getElementById('sync-status').textContent = 'Syncing...';
-            try {
-                const response = await fetch('/api/sync', { method: 'POST' });
-                const data = await response.json();
-                document.getElementById('sync-status').textContent = 
-                    `Done! ${data.total} projects, ${data.new} new`;
-                setTimeout(() => location.reload(), 2000);
-            } catch (e) {
-                document.getElementById('sync-status').textContent = 'Error: ' + e.message;
+    <div class="col-md-6 mb-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-clock-history"></i> Recently Added</h5>
+                <a href="{{ url_for('projects') }}" class="btn btn-sm btn-outline-primary">View All</a>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Project</th>
+                            <th>MW</th>
+                            <th>ISO</th>
+                            <th>Score</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for p in recent %}
+                        <tr onclick="window.location='{{ url_for('project_detail', id=p.id) }}';" style="cursor: pointer;">
+                            <td>
+                                <div class="text-truncate" style="max-width: 200px;">
+                                    {{ p.project_name }}
+                                </div>
+                                <small class="text-muted">{{ p.state }}</small>
+                            </td>
+                            <td>{{ "%.0f"|format(p.capacity_mw) }}</td>
+                            <td><span class="utility-badge utility-{{ p.utility }}">{{ p.utility }}</span></td>
+                            <td>
+                                {% if p.hunter_score > 0 %}
+                                <span class="hunter-score-badge {% if p.hunter_score >= 70 %}score-high{% elif p.hunter_score >= 40 %}score-medium{% else %}score-low{% endif %}">
+                                    {{ p.hunter_score }}
+                                </span>
+                                {% else %}
+                                <span class="text-muted">-</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- System Status -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-info-circle"></i> System Status</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <strong>gridstatus Library:</strong>
+                        {% if gridstatus_available %}
+                        <span class="badge bg-success">Available</span>
+                        {% else %}
+                        <span class="badge bg-warning">Not Installed</span>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-4">
+                        <strong>Last Sync:</strong>
+                        {% if last_run %}
+                        {{ last_run.run_date }} ({{ last_run.projects_found }} found)
+                        {% else %}
+                        Never
+                        {% endif %}
+                    </div>
+                    <div class="col-md-4">
+                        <strong>Data Sources:</strong> 7 ISOs + Berkeley Lab
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Utility Chart
+new Chart(document.getElementById('utilityChart'), {
+    type: 'doughnut',
+    data: {
+        labels: [{% for u in by_utility %}'{{ u.utility }}',{% endfor %}],
+        datasets: [{
+            data: [{% for u in by_utility %}{{ u.count }},{% endfor %}],
+            backgroundColor: [
+                '#0d6efd', '#198754', '#ffc107', '#dc3545', 
+                '#6f42c1', '#0dcaf0', '#fd7e14', '#20c997'
+            ]
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: {
+                position: 'right'
             }
         }
-    </script>
-</body>
-</html>
+    }
+});
+
+// Type Chart
+new Chart(document.getElementById('typeChart'), {
+    type: 'bar',
+    data: {
+        labels: [{% for t in by_type %}'{{ t.project_type }}',{% endfor %}],
+        datasets: [{
+            label: 'Projects',
+            data: [{% for t in by_type %}{{ t.count }},{% endfor %}],
+            backgroundColor: 'rgba(13, 110, 253, 0.8)'
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: {
+                display: false
+            }
+        },
+        scales: {
+            y: {
+                beginAtZero: true
+            }
+        }
+    }
+});
+</script>
+{% endblock %}
