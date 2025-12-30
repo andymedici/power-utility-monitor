@@ -399,9 +399,10 @@ class HybridPowerMonitor:
         # Berkeley Lab publishes data quarterly/annually
         # Try multiple URL patterns as they sometimes change
         possible_urls = [
+            'https://eta-publications.lbl.gov/sites/default/files/2025-12/queued_up_2025_data_file.xlsx',
+            'https://emp.lbl.gov/sites/default/files/2025-12/queued_up_2025_data_file.xlsx',
+            'https://eta-publications.lbl.gov/sites/default/files/lbnl_interconnection_queue_2025.xlsx',
             'https://emp.lbl.gov/sites/default/files/queued_up_2025_data_file.xlsx',
-            'https://emp.lbl.gov/sites/default/files/lbnl_interconnection_queue_2025.xlsx',
-            'https://emp.lbl.gov/sites/default/files/2025/queued_up_data.xlsx',
         ]
         
         excel_data = None
@@ -644,13 +645,23 @@ class HybridPowerMonitor:
                 df = pd.read_csv(StringIO(response.text))
                 logger.info(f"SPP: Processing {len(df)} rows")
                 
-                # Find MW columns
+                # Find MW columns - SPP uses various naming conventions
                 mw_cols = [col for col in df.columns if 'MW' in str(col).upper()]
                 logger.info(f"SPP MW columns: {mw_cols}")
+                logger.info(f"SPP all columns: {list(df.columns)[:20]}")  # Debug: show first 20 columns
                 
                 for _, row in df.iterrows():
                     capacity = None
-                    for col in mw_cols + ['Size', 'Capacity']:
+                    # Try multiple column name variations
+                    possible_cols = mw_cols + [
+                        'Size', 'Capacity', 'Generation', 
+                        'Summer Capacity', 'Winter Capacity',
+                        'Max Capacity', 'Nameplate',
+                        'Gen MW', 'Generator MW',
+                        'Net MW', 'Gross MW'
+                    ]
+                    
+                    for col in possible_cols:
                         if col in df.columns:
                             capacity = self.extract_capacity(row.get(col))
                             if capacity:
