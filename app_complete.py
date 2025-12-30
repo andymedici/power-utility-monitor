@@ -522,13 +522,30 @@ class HybridPowerMonitor:
             stored = 0
             for project_data in projects:
                 try:
-                    existing = PowerProject.query.filter_by(data_hash=project_data['data_hash']).first()
+                    request_id = project_data.get('request_id')
+                    data_hash = project_data.get('data_hash')
+                    
+                    existing = PowerProject.query.filter(
+                        db.or_(
+                            PowerProject.request_id == request_id,
+                            PowerProject.data_hash == data_hash
+                        )
+                    ).first()
+                    
                     if not existing:
+                        # Fill in missing fields
+                        for field in ['queue_position', 'location', 'county', 'customer', 'developer', 
+                                     'utility', 'status', 'fuel_type', 'interconnection_point']:
+                            if field not in project_data:
+                                project_data[field] = ''
+                        
                         project = PowerProject(**project_data)
                         db.session.add(project)
                         stored += 1
+                        
                 except Exception as e:
-                    logger.error(f"Error storing Berkeley Lab project: {e}")
+                    db.session.rollback()
+                    logger.error(f"Error storing Berkeley Lab project {project_data.get('request_id', 'unknown')}: {e}")
             
             db.session.commit()
             
@@ -748,7 +765,17 @@ class HybridPowerMonitor:
                 if 'data_hash' not in project_data:
                     project_data['data_hash'] = self.generate_hash(project_data)
                 
-                existing = PowerProject.query.filter_by(data_hash=project_data['data_hash']).first()
+                # Check for existing project by BOTH request_id and data_hash
+                request_id = project_data.get('request_id')
+                data_hash = project_data.get('data_hash')
+                
+                existing = PowerProject.query.filter(
+                    db.or_(
+                        PowerProject.request_id == request_id,
+                        PowerProject.data_hash == data_hash
+                    )
+                ).first()
+                
                 if not existing:
                     # Fill in missing fields
                     for field in ['queue_position', 'location', 'county', 'customer', 'developer', 
@@ -759,8 +786,11 @@ class HybridPowerMonitor:
                     project = PowerProject(**project_data)
                     db.session.add(project)
                     stored += 1
+                    
             except Exception as e:
-                logger.error(f"Error storing project: {e}")
+                # Rollback the session on any error to prevent cascade
+                db.session.rollback()
+                logger.error(f"Error storing project {project_data.get('request_id', 'unknown')}: {e}")
         
         db.session.commit()
         
