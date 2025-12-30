@@ -1,9 +1,8 @@
 {% extends "base.html" %}
-
-{% block title %}Projects - Power Utility Monitor{% endblock %}
+{% block title %}Projects - Power Monitor{% endblock %}
 
 {% block content %}
-<!-- Page Header -->
+<!-- Header -->
 <div class="row mb-4">
     <div class="col-12">
         <div class="d-flex justify-content-between align-items-center">
@@ -57,7 +56,7 @@
                     </a>
                 </div>
                 
-                <!-- Search & Filters Form -->
+                <!-- Search Form -->
                 <form method="get" class="row g-3">
                     <input type="hidden" name="filter" value="{{ filter_type }}">
                     
@@ -72,9 +71,7 @@
                         <select name="state" class="form-select">
                             <option value="">All States</option>
                             {% for state in states %}
-                            <option value="{{ state }}" {% if state_filter == state %}selected{% endif %}>
-                                {{ state }}
-                            </option>
+                            <option value="{{ state }}" {% if state_filter == state %}selected{% endif %}>{{ state }}</option>
                             {% endfor %}
                         </select>
                     </div>
@@ -110,13 +107,13 @@
                 <table class="table table-hover mb-0">
                     <thead class="table-light sticky-top">
                         <tr>
-                            <th style="width: 80px;">Score</th>
-                            <th>Project Name / ID</th>
-                            <th style="width: 120px;">Customer</th>
+                            <th style="width: 70px;">Score</th>
+                            <th>Project Name</th>
+                            <th style="width: 150px;">Customer</th>
                             <th style="width: 80px;">MW</th>
                             <th style="width: 100px;">Type</th>
-                            <th style="width: 150px;">Location</th>
-                            <th style="width: 100px;">Source</th>
+                            <th style="width: 140px;">Location</th>
+                            <th style="width: 90px;">ISO</th>
                             <th style="width: 100px;">Status</th>
                         </tr>
                     </thead>
@@ -135,31 +132,31 @@
                             <td>
                                 <div>
                                     <strong class="text-primary">
-                                        {{ p.project_name[:45] }}{% if p.project_name|length > 45 %}...{% endif %}
+                                        {{ p.project_name[:50] }}{% if p.project_name|length > 50 %}...{% endif %}
                                     </strong>
                                 </div>
                                 <small class="text-muted">{{ p.request_id }}</small>
                             </td>
                             <td>
-                                <small>{{ p.customer[:30] if p.customer else '-' }}</small>
+                                <small>{{ (p.customer or '-')[:25] }}{% if (p.customer or '')|length > 25 %}...{% endif %}</small>
                             </td>
                             <td>
                                 <strong>{{ "%.0f"|format(p.capacity_mw) }}</strong>
                             </td>
                             <td>
-                                <span class="badge bg-secondary">{{ p.fuel_type or 'Unknown' }}</span>
+                                <span class="badge bg-secondary">{{ p.fuel_type or p.project_type or 'Unknown' }}</span>
                             </td>
                             <td>
                                 {% if 'loudoun' in (p.county or '').lower() or 'ashburn' in (p.county or '').lower() %}
-                                    <span class="hotspot-icon">🔥</span>
+                                <span class="hotspot-icon">🔥</span>
                                 {% endif %}
-                                {{ p.county or '-' }}, {{ p.state or '-' }}
+                                {{ (p.county or '-')[:15] }}, {{ p.state or '-' }}
                             </td>
                             <td>
-                                <span class="source-badge badge bg-info">{{ p.source }}</span>
+                                <span class="utility-badge utility-{{ p.utility }}">{{ p.utility }}</span>
                             </td>
                             <td>
-                                <small class="text-muted">{{ p.status or 'Active' }}</small>
+                                <small class="text-muted">{{ (p.status or 'Active')[:15] }}</small>
                             </td>
                         </tr>
                         {% endfor %}
@@ -194,9 +191,7 @@
                         {% endif %}
                         
                         <li class="page-item active">
-                            <span class="page-link">
-                                Page {{ pagination.page }} of {{ pagination.pages }}
-                            </span>
+                            <span class="page-link">Page {{ pagination.page }} of {{ pagination.pages }}</span>
                         </li>
                         
                         {% if pagination.has_next %}
@@ -209,44 +204,10 @@
                     </ul>
                 </nav>
                 <p class="text-center text-muted small mb-0 mt-2">
-                    Showing {{ (pagination.page - 1) * 50 + 1 }} - {{ min(pagination.page * 50, pagination.total) }} of {{ pagination.total }} projects
+                    Showing {{ (pagination.page - 1) * 50 + 1 }} - {{ [pagination.page * 50, pagination.total]|min }} of {{ pagination.total }}
                 </p>
             </div>
             {% endif %}
-        </div>
-    </div>
-</div>
-
-<!-- Quick Stats -->
-<div class="row mt-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-body">
-                <div class="row text-center">
-                    <div class="col-md-3">
-                        <h4 class="text-primary mb-0">{{ pagination.total }}</h4>
-                        <small class="text-muted">Total Projects</small>
-                    </div>
-                    <div class="col-md-3">
-                        <h4 class="text-danger mb-0">
-                            {{ pagination.items|selectattr('hunter_score', 'ge', 70)|list|length }}
-                        </h4>
-                        <small class="text-muted">High Confidence</small>
-                    </div>
-                    <div class="col-md-3">
-                        <h4 class="text-warning mb-0">
-                            {{ pagination.items|selectattr('hunter_score', 'ge', 40)|selectattr('hunter_score', 'lt', 70)|list|length }}
-                        </h4>
-                        <small class="text-muted">Medium Confidence</small>
-                    </div>
-                    <div class="col-md-3">
-                        <h4 class="text-success mb-0">
-                            {{ "%.0f"|format(pagination.items|sum(attribute='capacity_mw')) }}
-                        </h4>
-                        <small class="text-muted">Total MW (This Page)</small>
-                    </div>
-                </div>
-            </div>
         </div>
     </div>
 </div>
