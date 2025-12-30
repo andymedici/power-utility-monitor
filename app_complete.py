@@ -414,7 +414,10 @@ class HybridPowerMonitor:
         for url in possible_urls:
             try:
                 logger.info(f"Berkeley Lab: Trying {url}")
-                response = self.session.get(url, timeout=60)
+                response = self.session.get(url, timeout=60, headers={
+                    'Referer': 'https://emp.lbl.gov/queues',
+                    'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,*/*',
+                })
                 
                 if response.status_code == 200 and len(response.content) > 1000:
                     excel_data = BytesIO(response.content)
@@ -600,7 +603,7 @@ class HybridPowerMonitor:
         if GRIDSTATUS_AVAILABLE:
             try:
                 logger.info("ERCOT: Attempting gridstatus fetch")
-                ercot = gridstatus.ERCOT()
+                ercot = gridstatus.Ercot()
                 df = ercot.get_interconnection_queue()
                 
                 for _, row in df.iterrows():
@@ -718,6 +721,54 @@ class HybridPowerMonitor:
         
         logger.info(f"SPP: Found {len(projects)} projects")
         return projects
+
+    def fetch_miso_direct(self):
+        """MISO - 14 Midwest states - FREE JSON API!"""
+        projects = []
+        url = "https://www.misoenergy.org/api/giqueue/getprojects"
+        
+        try:
+            logger.info(f"MISO: Fetching from JSON API: {url}")
+            response = self.session.get(url, timeout=60)
+            
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"MISO: Retrieved {len(data)} rows from API")
+                
+                for project in data:
+                    capacity = self.extract_capacity(
+                        project.get('summerNetMW') or 
+                        project.get('winterNetMW') or 0
+                    )
+                    
+                    if capacity and capacity >= self.min_capacity_mw:
+                        proj_data = {
+                            'request_id': f"MISO_{project.get('jNumber', 'UNK')}",
+                            'project_name': str(project.get('projectName', 'Unknown'))[:500],
+                            'capacity_mw': capacity,
+                            'county': str(project.get('county', ''))[:200],
+                            'state': str(project.get('state', ''))[:2],
+                            'customer': str(project.get('interconnectionEntity', ''))[:500],
+                            'utility': 'MISO',
+                            'status': str(project.get('status', 'Active')),
+                            'fuel_type': str(project.get('fuelType', '')),
+                            'source': 'MISO',
+                            'source_url': url,
+                            'project_type': self.classify_project(
+                                project.get('projectName', ''),
+                                project.get('interconnectionEntity', ''),
+                                project.get('fuelType', '')
+                            )
+                        }
+                        proj_data['data_hash'] = self.generate_hash(proj_data)
+                        projects.append(proj_data)
+                
+                logger.info(f"MISO: Found {len(projects)} projects")
+                        
+        except Exception as e:
+            logger.error(f"MISO error: {e}")
+        
+        return projects
     
     def fetch_pjm_gridstatus(self):
         """Try PJM using gridstatus if API key available"""
@@ -777,12 +828,13 @@ class HybridPowerMonitor:
         
         # Define monitors - mix of gridstatus and direct
         monitors = [
-            ('CAISO', self.fetch_caiso_gridstatus),  # Tries gridstatus, falls back to direct
-            ('NYISO', self.fetch_nyiso_direct),      # Direct URL (works well)
-            ('ISO-NE', self.fetch_isone),            # Direct HTML parsing (works well)
-            ('ERCOT', self.fetch_ercot_gridstatus),  # gridstatus only (needs API)
-            ('SPP', self.fetch_spp_direct),           # Direct CSV
-            ('PJM', self.fetch_pjm_gridstatus),      # gridstatus with API key
+            ('CAISO', self.fetch_caiso_gridstatus),
+            ('NYISO', self.fetch_nyiso_direct),
+            ('ISO-NE', self.fetch_isone),
+            ('MISO', self.fetch_miso_direct),         # NEW: Free JSON API!
+            ('ERCOT', self.fetch_ercot_gridstatus),   # FIXED: Ercot() not ERCOT()
+            ('SPP', self.fetch_spp_direct),
+            ('PJM', self.fetch_pjm_gridstatus),
         ]
         
         total_sources = len(monitors)
@@ -1470,3 +1522,4 @@ with app.app_context():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
