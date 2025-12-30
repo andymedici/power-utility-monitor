@@ -1,62 +1,101 @@
 {% extends "base.html" %}
-{% block title %}Analytics - Power Utility Monitor{% endblock %}
+{% block title %}Analytics - Power Monitor{% endblock %}
+
 {% block content %}
 <h2 class="mb-4"><i class="bi bi-graph-up"></i> Market Analytics</h2>
 
+<!-- Score Distribution -->
 <div class="row mb-4">
-    <div class="col-md-4">
-        <div class="card stat-card">
-            <div class="stat-value">{{ score_distribution.high }}</div>
-            <div class="stat-label">High Confidence DCs</div>
+    <div class="col-md-4 mb-3">
+        <div class="stat-card text-center">
+            <div class="stat-value text-danger">{{ score_distribution.high }}</div>
+            <div class="stat-label">High Confidence (70+)</div>
+            <small class="text-muted">Likely Data Centers</small>
         </div>
     </div>
-    <div class="col-md-4">
-        <div class="card stat-card">
+    <div class="col-md-4 mb-3">
+        <div class="stat-card text-center">
             <div class="stat-value text-warning">{{ score_distribution.medium }}</div>
-            <div class="stat-label">Medium Confidence</div>
+            <div class="stat-label">Medium Confidence (40-69)</div>
+            <small class="text-muted">Possible Data Centers</small>
         </div>
     </div>
-    <div class="col-md-4">
-        <div class="card stat-card">
+    <div class="col-md-4 mb-3">
+        <div class="stat-card text-center">
             <div class="stat-value text-secondary">{{ score_distribution.low }}</div>
-            <div class="stat-label">Low Confidence</div>
+            <div class="stat-label">Low/No Score (&lt;40)</div>
+            <small class="text-muted">Other Projects</small>
         </div>
     </div>
 </div>
 
 <div class="row">
+    <!-- State Chart -->
     <div class="col-md-6 mb-4">
-        <div class="card">
-            <div class="card-header bg-white"><h5>Top States by Project Count</h5></div>
-            <div class="card-body"><canvas id="stateChart"></canvas></div>
+        <div class="card h-100">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-bar-chart"></i> Top States by Project Count</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="stateChart" height="300"></canvas>
+            </div>
         </div>
     </div>
+    
+    <!-- Hotspots -->
     <div class="col-md-6 mb-4">
-        <div class="card">
-            <div class="card-header bg-white"><h5>Data Center Hotspots</h5></div>
+        <div class="card h-100">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-geo-alt"></i> Data Center Hotspots</h5>
+            </div>
             <ul class="list-group list-group-flush">
                 {% for hotspot in hotspot_stats[:10] %}
-                <li class="list-group-item d-flex justify-content-between">
-                    <span>{{ hotspot.county }}, {{ hotspot.state }}</span>
-                    <span><strong>{{ hotspot.count }}</strong> projects (avg {{ "%.0f"|format(hotspot.avg_score) }} score)</span>
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <div>
+                        <strong>{{ hotspot.county or 'Unknown' }}</strong>, {{ hotspot.state or '?' }}
+                    </div>
+                    <div class="text-end">
+                        <span class="badge bg-primary">{{ hotspot.count }} projects</span>
+                        <br>
+                        <small class="text-muted">Avg Score: {{ "%.0f"|format(hotspot.avg_score or 0) }}</small>
+                    </div>
                 </li>
                 {% endfor %}
+                {% if not hotspot_stats %}
+                <li class="list-group-item text-center text-muted py-4">
+                    No hotspot data available
+                </li>
+                {% endif %}
             </ul>
         </div>
     </div>
 </div>
 
+<!-- Timeline -->
 <div class="row">
     <div class="col-12">
         <div class="card">
-            <div class="card-header bg-white"><h5>Discovery Timeline (Last 30 Days)</h5></div>
-            <div class="card-body"><canvas id="timelineChart"></canvas></div>
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-calendar3"></i> Discovery Timeline (Last 30 Days)</h5>
+            </div>
+            <div class="card-body">
+                {% if timeline %}
+                <canvas id="timelineChart" height="100"></canvas>
+                {% else %}
+                <div class="text-center py-4 text-muted">
+                    <i class="bi bi-calendar-x display-4"></i>
+                    <p class="mt-2">No timeline data available yet</p>
+                </div>
+                {% endif %}
+            </div>
         </div>
     </div>
 </div>
 {% endblock %}
+
 {% block extra_js %}
 <script>
+// State Chart
 new Chart(document.getElementById('stateChart'), {
     type: 'bar',
     data: {
@@ -66,9 +105,16 @@ new Chart(document.getElementById('stateChart'), {
             data: [{% for s in state_stats %}{{ s.count }},{% endfor %}],
             backgroundColor: 'rgba(13, 110, 253, 0.8)'
         }]
+    },
+    options: {
+        indexAxis: 'y',
+        responsive: true,
+        plugins: { legend: { display: false } }
     }
 });
 
+{% if timeline %}
+// Timeline Chart
 new Chart(document.getElementById('timelineChart'), {
     type: 'line',
     data: {
@@ -77,9 +123,17 @@ new Chart(document.getElementById('timelineChart'), {
             label: 'New Projects',
             data: [{% for t in timeline %}{{ t.count }},{% endfor %}],
             borderColor: 'rgb(13, 110, 253)',
-            tension: 0.1
+            backgroundColor: 'rgba(13, 110, 253, 0.1)',
+            fill: true,
+            tension: 0.3
         }]
+    },
+    options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true } }
     }
 });
+{% endif %}
 </script>
 {% endblock %}
