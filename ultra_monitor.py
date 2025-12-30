@@ -1,13 +1,15 @@
-# ultra_monitor.py - Complete Ultra Power Monitor with PJM + Virginia SCC
+# ultra_monitor.py - Complete Ultra Power Monitor with 6 ISOs
 """
-UPGRADED VERSION with:
-1. PJM public queue scraper (no API key needed!)
-2. Virginia State Corporation Commission monitoring
-3. Smart Excel/CSV parsing with metadata handling
-4. Hunter scoring algorithm for data center detection
-5. 5 ISOs + Virginia coverage
+COMPLETE VERSION with 6 ISOs:
+- CAISO (California): 262 projects ✅
+- NYISO (New York): 83 projects ✅
+- SPP (9 states): 758 projects ✅
+- MISO (14 states): 600-1000 projects NEW!
+- ISO-NE (6 states): 200-400 projects NEW!
+- ERCOT (Texas): 150-300 projects NEW!
 
-Coverage: 24+ states, 1300-1700+ projects expected
+Total Expected: 2,053-2,803 projects
+Coverage: 40+ states
 """
 
 import os
@@ -46,7 +48,7 @@ def retry_with_backoff(max_retries=3, backoff_factor=2):
 
 
 class UltraPowerMonitor:
-    """Ultimate power monitoring with PJM + Virginia SCC coverage"""
+    """Complete power monitoring with 6 ISOs covering 40+ states"""
     
     def __init__(self):
         self.min_capacity_mw = 100
@@ -203,10 +205,9 @@ class UltraPowerMonitor:
             
             if response.status_code == 200:
                 df = self.read_excel_smart(response.content, "CAISO")
-                logger.info(f"CAISO: {len(df)} rows, columns: {list(df.columns)[:10]}")
+                logger.info(f"CAISO: {len(df)} rows")
                 
                 mw_cols = [c for c in df.columns if any(x in str(c).upper() for x in ['MW', 'CAPACITY', 'OUTPUT'])]
-                logger.info(f"CAISO: MW columns found: {mw_cols[:3]}")
                 
                 if not mw_cols:
                     logger.error(f"CAISO: No MW columns found!")
@@ -223,7 +224,7 @@ class UltraPowerMonitor:
                     if capacity:
                         data = {
                             'request_id': f"CAISO_{idx}",
-                            'project_name': str(row.get('Project Name', row.get('Generating Facility', f'Project {idx}')))[:500],
+                            'project_name': str(row.get('Project Name', f'Project {idx}'))[:500],
                             'capacity_mw': capacity,
                             'county': str(row.get('County', ''))[:200],
                             'state': 'CA',
@@ -241,7 +242,7 @@ class UltraPowerMonitor:
                         data['data_hash'] = self.generate_hash(data)
                         projects.append(data)
                 
-                logger.info(f"CAISO: Found {len(projects)} projects >= {self.min_capacity_mw}MW")
+                logger.info(f"CAISO: Found {len(projects)} projects")
                         
         except Exception as e:
             logger.error(f"CAISO error: {e}", exc_info=True)
@@ -260,10 +261,9 @@ class UltraPowerMonitor:
             
             if response.status_code == 200:
                 df = self.read_excel_smart(response.content, "NYISO")
-                logger.info(f"NYISO: {len(df)} rows, columns: {list(df.columns)[:10]}")
+                logger.info(f"NYISO: {len(df)} rows")
                 
                 mw_cols = [c for c in df.columns if any(x in str(c).upper() for x in ['MW', 'CAPACITY', 'CAP'])]
-                logger.info(f"NYISO: MW columns: {mw_cols[:3]}")
                 
                 if not mw_cols:
                     return []
@@ -322,15 +322,14 @@ class UltraPowerMonitor:
                         cols = [str(c) for c in df.columns]
                         
                         if len(cols) > 5 and not all('Unnamed' in c for c in cols):
-                            logger.info(f"SPP: Loaded with skiprows={skip}, columns: {cols[:5]}")
+                            logger.info(f"SPP: Loaded with skiprows={skip}")
                             break
                     except:
                         continue
                 
-                logger.info(f"SPP: {len(df)} rows, columns: {list(df.columns)[:10]}")
+                logger.info(f"SPP: {len(df)} rows")
                 
                 mw_cols = [c for c in df.columns if any(x in str(c).upper() for x in ['MW', 'SIZE', 'CAPACITY'])]
-                logger.info(f"SPP: MW columns: {mw_cols[:3]}")
                 
                 if not mw_cols:
                     return []
@@ -371,241 +370,278 @@ class UltraPowerMonitor:
         
         return projects
     
-    # ==================== PJM (NEW: Public Scraper!) ====================
-    def fetch_pjm(self):
-        """PJM - Scrape public queue (NO API KEY NEEDED!)"""
+    # ==================== MISO (NEW!) ====================
+    def fetch_miso(self):
+        """MISO - 14 Midwest states"""
         projects = []
         
+        # Try multiple MISO data sources
+        urls = [
+            'https://cdn.misoenergy.org/GIQ%20PUBLIC%20DATA625353.xlsx',
+            'https://cdn.misoenergy.org/GIQ%20PUBLIC%20DATA625353.xls',
+        ]
+        
         try:
-            logger.info("PJM: Scraping public queue page...")
+            logger.info("MISO: Attempting to fetch queue data...")
             
-            # Step 1: Get the queue page
-            page_url = "https://www.pjm.com/planning/services-requests/interconnection-queues"
-            response = self.fetch_url(page_url, timeout=30)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Step 2: Find Excel file links
-            excel_links = []
-            for link in soup.find_all('a', href=True):
-                href = link['href']
-                text = link.get_text().lower()
-                
-                # Look for queue-related Excel files
-                if any(ext in href.lower() for ext in ['.xlsx', '.xls', '.ashx']):
-                    if any(kw in href.lower() or kw in text for kw in ['queue', 'interconnection', 'service']):
-                        full_url = href if href.startswith('http') else f"https://www.pjm.com{href}"
-                        excel_links.append((full_url, text))
-                        logger.info(f"PJM: Found potential file: {text[:50]}")
-            
-            # Step 3: Try each file
-            for url, desc in excel_links[:3]:  # Try first 3 matches
+            for url in urls:
                 try:
-                    logger.info(f"PJM: Downloading {desc[:30]}...")
+                    logger.info(f"MISO: Trying {url}")
                     response = self.fetch_url(url, timeout=60)
                     
-                    if response.status_code != 200 or len(response.content) < 10000:
-                        continue
-                    
-                    # Try to read as Excel
-                    df = self.read_excel_smart(response.content, "PJM")
-                    
-                    if len(df) < 50:  # Should have many projects
-                        logger.info(f"PJM: File too small ({len(df)} rows), skipping")
-                        continue
-                    
-                    logger.info(f"PJM: SUCCESS! {len(df)} rows, columns: {list(df.columns)[:10]}")
-                    
-                    # Find MW columns
-                    mw_cols = [c for c in df.columns if any(x in str(c).upper() for x in ['MW', 'CAPACITY', 'SIZE'])]
-                    logger.info(f"PJM: MW columns: {mw_cols[:3]}")
-                    
-                    if not mw_cols:
-                        logger.warning("PJM: No MW columns found")
-                        continue
-                    
-                    # Process projects
-                    for idx, row in df.iterrows():
-                        capacity = None
-                        for col in mw_cols:
-                            cap = self.extract_capacity(row.get(col))
-                            if cap:
-                                capacity = cap
-                                break
+                    if response.status_code == 200 and len(response.content) > 10000:
+                        df = self.read_excel_smart(response.content, "MISO")
                         
-                        if capacity:
-                            data = {
-                                'request_id': f"PJM_{row.get('Queue ID', row.get('Queue Number', row.get('Queue Position', idx)))}",
-                                'project_name': str(row.get('Project Name', row.get('Generator Name', f'Project {idx}')))[:500],
-                                'capacity_mw': capacity,
-                                'county': str(row.get('County', ''))[:200],
-                                'state': str(row.get('State', ''))[:2],
-                                'customer': str(row.get('Interconnection Customer', row.get('Customer', row.get('Developer', ''))))[:500],
-                                'utility': 'PJM',
-                                'status': str(row.get('Status', 'Active')),
-                                'fuel_type': str(row.get('Fuel Type', row.get('Type', row.get('Technology', '')))),
-                                'source': 'PJM',
-                                'source_url': url,
-                            }
+                        if len(df) < 50:
+                            logger.info(f"MISO: File too small ({len(df)} rows), trying next URL")
+                            continue
+                        
+                        logger.info(f"MISO: SUCCESS! {len(df)} rows")
+                        
+                        # Find MW columns
+                        mw_cols = [c for c in df.columns if any(x in str(c).upper() for x in ['MW', 'CAPACITY', 'SIZE', 'NAMEPLATE'])]
+                        logger.info(f"MISO: MW columns: {mw_cols[:3]}")
+                        
+                        if not mw_cols:
+                            logger.warning("MISO: No MW columns found")
+                            continue
+                        
+                        # Process projects
+                        for idx, row in df.iterrows():
+                            capacity = None
+                            for col in mw_cols:
+                                cap = self.extract_capacity(row.get(col))
+                                if cap:
+                                    capacity = cap
+                                    break
                             
-                            score_result = self.calculate_hunter_score(data)
-                            data.update(score_result)
-                            data['project_type'] = 'datacenter' if score_result['hunter_score'] >= 60 else 'other'
-                            data['data_hash'] = self.generate_hash(data)
-                            projects.append(data)
-                    
-                    logger.info(f"PJM: Found {len(projects)} projects >= {self.min_capacity_mw}MW")
-                    break  # Success! Stop trying other files
-                    
+                            if capacity:
+                                data = {
+                                    'request_id': f"MISO_{row.get('Queue Number', row.get('J-Number', idx))}",
+                                    'project_name': str(row.get('Project Name', row.get('Resource Name', f'Project {idx}')))[:500],
+                                    'capacity_mw': capacity,
+                                    'county': str(row.get('County', ''))[:200],
+                                    'state': str(row.get('State', ''))[:2],
+                                    'customer': str(row.get('Interconnection Customer', row.get('Developer', '')))[:500],
+                                    'utility': 'MISO',
+                                    'status': str(row.get('Status', 'Active')),
+                                    'fuel_type': str(row.get('Fuel Type', row.get('Technology', ''))),
+                                    'source': 'MISO',
+                                    'source_url': url,
+                                }
+                                
+                                score_result = self.calculate_hunter_score(data)
+                                data.update(score_result)
+                                data['project_type'] = 'datacenter' if score_result['hunter_score'] >= 60 else 'other'
+                                data['data_hash'] = self.generate_hash(data)
+                                projects.append(data)
+                        
+                        logger.info(f"MISO: Found {len(projects)} projects")
+                        break  # Success!
+                        
                 except Exception as e:
-                    logger.warning(f"PJM: Failed to parse {desc[:30]}: {e}")
+                    logger.warning(f"MISO: Failed URL {url}: {e}")
                     continue
             
             if not projects:
-                logger.warning("PJM: No valid queue file found. Check website manually.")
-                logger.info("PJM: Visit https://www.pjm.com/planning/services-requests/interconnection-queues")
+                logger.warning("MISO: No valid data found. Check MISO website manually.")
                         
         except Exception as e:
-            logger.error(f"PJM error: {e}", exc_info=True)
+            logger.error(f"MISO error: {e}", exc_info=True)
         
         return projects
     
-    # ==================== VIRGINIA SCC (NEW!) ====================
-    def fetch_virginia_scc(self):
-        """Virginia State Corporation Commission - Target Northern Virginia data centers"""
+    # ==================== ISO-NE (NEW!) ====================
+    def fetch_isone(self):
+        """ISO-NE - 6 New England states"""
         projects = []
         
+        # ISO-NE has IRTT (Interconnection Request Tracking Tool)
+        urls = [
+            'https://irtt.iso-ne.com/reports/external/export?format=xlsx',
+            'https://www.iso-ne.com/static-assets/documents/interconnection_queue.xlsx',
+        ]
+        
         try:
-            logger.info("VA SCC: Searching for interconnection cases...")
+            logger.info("ISO-NE: Attempting to fetch queue data...")
             
-            # Virginia SCC docket search
-            search_url = "https://scc.virginia.gov/docketsearch/Default.aspx"
-            
-            # Keywords to search for
-            keywords = ['interconnection', 'generation facility', 'Dominion Energy']
-            
-            session = requests.Session()
-            session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            })
-            
-            for keyword in keywords[:1]:  # Start with just interconnection
+            for url in urls:
                 try:
-                    response = session.get(search_url, timeout=30)
-                    soup = BeautifulSoup(response.content, 'html.parser')
+                    logger.info(f"ISO-NE: Trying {url}")
+                    response = self.fetch_url(url, timeout=60)
                     
-                    # Look for case links
-                    case_count = 0
-                    for link in soup.find_all('a', href=True):
-                        if 'PUR' in link.text or 'PUE' in link.text:
-                            case_number = link.text.strip()
-                            case_url = link['href']
+                    if response.status_code == 200 and len(response.content) > 5000:
+                        df = self.read_excel_smart(response.content, "ISO-NE")
+                        
+                        if len(df) < 10:
+                            logger.info(f"ISO-NE: File too small ({len(df)} rows), trying next URL")
+                            continue
+                        
+                        logger.info(f"ISO-NE: SUCCESS! {len(df)} rows")
+                        
+                        # Find MW columns
+                        mw_cols = [c for c in df.columns if any(x in str(c).upper() for x in ['MW', 'NET MW', 'CAPACITY'])]
+                        logger.info(f"ISO-NE: MW columns: {mw_cols[:3]}")
+                        
+                        if not mw_cols:
+                            logger.warning("ISO-NE: No MW columns found")
+                            continue
+                        
+                        # Process projects
+                        for idx, row in df.iterrows():
+                            capacity = None
+                            for col in mw_cols:
+                                cap = self.extract_capacity(row.get(col))
+                                if cap:
+                                    capacity = cap
+                                    break
                             
-                            if not case_url.startswith('http'):
-                                case_url = f"https://scc.virginia.gov{case_url}"
-                            
-                            # Parse case (simplified for now)
-                            case_data = self.parse_scc_case(session, case_url, case_number)
-                            if case_data:
-                                projects.append(case_data)
-                                case_count += 1
-                            
-                            if case_count >= 10:  # Limit to 10 cases to avoid timeout
-                                break
-                    
+                            if capacity:
+                                # Map state abbreviations
+                                state = str(row.get('State', row.get('ST', '')))[:2]
+                                
+                                data = {
+                                    'request_id': f"ISONE_{row.get('Queue Position', row.get('QP', idx))}",
+                                    'project_name': str(row.get('Project Name', f'Project {idx}'))[:500],
+                                    'capacity_mw': capacity,
+                                    'county': str(row.get('County', ''))[:200],
+                                    'state': state,
+                                    'customer': str(row.get('Interconnection Customer', row.get('Developer', '')))[:500],
+                                    'utility': 'ISO-NE',
+                                    'status': str(row.get('Status', 'Active')),
+                                    'fuel_type': str(row.get('Fuel Type', row.get('Unit', ''))),
+                                    'source': 'ISO-NE',
+                                    'source_url': url,
+                                }
+                                
+                                score_result = self.calculate_hunter_score(data)
+                                data.update(score_result)
+                                data['project_type'] = 'datacenter' if score_result['hunter_score'] >= 60 else 'other'
+                                data['data_hash'] = self.generate_hash(data)
+                                projects.append(data)
+                        
+                        logger.info(f"ISO-NE: Found {len(projects)} projects")
+                        break  # Success!
+                        
                 except Exception as e:
-                    logger.warning(f"VA SCC: Error searching {keyword}: {e}")
+                    logger.warning(f"ISO-NE: Failed URL {url}: {e}")
                     continue
             
-            logger.info(f"VA SCC: Found {len(projects)} cases")
-            
+            if not projects:
+                logger.warning("ISO-NE: No valid data found. Check ISO-NE website manually.")
+                        
         except Exception as e:
-            logger.error(f"VA SCC error: {e}", exc_info=True)
+            logger.error(f"ISO-NE error: {e}", exc_info=True)
         
         return projects
     
-    def parse_scc_case(self, session, url, case_number):
-        """Parse individual SCC case for project details"""
-        try:
-            response = session.get(url, timeout=30)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            text = soup.get_text()
-            
-            # Look for capacity
-            capacity_match = re.search(r'(\d+\.?\d*)\s*(?:MW|megawatt)', text, re.IGNORECASE)
-            capacity = float(capacity_match.group(1)) if capacity_match else None
-            
-            if capacity and capacity >= self.min_capacity_mw:
-                # Extract location
-                county_match = re.search(r'(Loudoun|Fairfax|Prince William|Arlington|Fauquier)\s+County', text, re.IGNORECASE)
-                county = county_match.group(1) if county_match else ''
-                
-                # Extract customer
-                customer_match = re.search(r'Applicant[:\s]+([A-Za-z0-9\s,\.]+?)(?:\.|,|\n)', text)
-                customer = customer_match.group(1).strip() if customer_match else ''
-                
-                data = {
-                    'request_id': f"VA_SCC_{case_number}",
-                    'project_name': f"VA Case {case_number}",
-                    'capacity_mw': capacity,
-                    'county': county,
-                    'state': 'VA',
-                    'customer': customer[:500],
-                    'status': 'Pending',
-                    'fuel_type': 'Load' if 'load' in text.lower() else 'Generation',
-                    'utility': 'Dominion Energy',
-                    'source': 'VA SCC',
-                    'source_url': url,
-                }
-                
-                score_result = self.calculate_hunter_score(data)
-                data.update(score_result)
-                data['project_type'] = 'datacenter' if score_result['hunter_score'] >= 60 else 'other'
-                data['data_hash'] = self.generate_hash(data)
-                
-                return data
-        
-        except Exception as e:
-            logger.debug(f"Failed to parse case {case_number}: {e}")
-        
-        return None
-    
-    # ==================== Stub functions for future expansion ====================
-    def fetch_miso(self):
-        logger.info("MISO: Disabled in this version")
-        return []
-    
-    def fetch_isone(self):
-        logger.info("ISO-NE: Disabled in this version")
-        return []
-    
+    # ==================== ERCOT (NEW!) ====================
     def fetch_ercot(self):
-        logger.info("ERCOT: Disabled in this version")
-        return []
-    
-    def fetch_ferc_elibrary(self):
-        logger.info("FERC: Disabled in this version")
-        return []
-    
-    def fetch_utility_news(self):
-        logger.info("Utility News: Disabled in this version")
-        return []
+        """ERCOT - Texas"""
+        projects = []
+        
+        # ERCOT publishes GIS reports monthly
+        # Try to get the latest one
+        try:
+            logger.info("ERCOT: Attempting to fetch GIS report...")
+            
+            # Try current and previous months
+            today = datetime.now()
+            months_to_try = []
+            for i in range(6):  # Try last 6 months
+                month_date = today - timedelta(days=30*i)
+                months_to_try.append(month_date)
+            
+            for month_date in months_to_try:
+                # ERCOT format: GIS_Report_YYYYMM.xlsx
+                month_str = month_date.strftime('%Y%m')
+                urls = [
+                    f'https://www.ercot.com/files/docs/{month_date.year}/{month_date.month:02d}/GIS_Report_{month_str}.xlsx',
+                    f'https://mis.ercot.com/misapp/GetReports.do?reportTypeId=15933&reportTitle=GIS%20Report&showHTMLView=&mimicKey',
+                ]
+                
+                for url in urls:
+                    try:
+                        logger.info(f"ERCOT: Trying {month_str}")
+                        response = self.fetch_url(url, timeout=60)
+                        
+                        if response.status_code == 200 and len(response.content) > 10000:
+                            df = self.read_excel_smart(response.content, "ERCOT")
+                            
+                            if len(df) < 20:
+                                continue
+                            
+                            logger.info(f"ERCOT: SUCCESS! {len(df)} rows from {month_str}")
+                            
+                            # Find MW columns
+                            mw_cols = [c for c in df.columns if any(x in str(c).upper() for x in ['MW', 'CAPACITY', 'SIZE', 'NAMEPLATE'])]
+                            logger.info(f"ERCOT: MW columns: {mw_cols[:3]}")
+                            
+                            if not mw_cols:
+                                continue
+                            
+                            # Process projects
+                            for idx, row in df.iterrows():
+                                capacity = None
+                                for col in mw_cols:
+                                    cap = self.extract_capacity(row.get(col))
+                                    if cap:
+                                        capacity = cap
+                                        break
+                                
+                                if capacity:
+                                    data = {
+                                        'request_id': f"ERCOT_{row.get('Project Code', row.get('INR', idx))}",
+                                        'project_name': str(row.get('Project Name', f'Project {idx}'))[:500],
+                                        'capacity_mw': capacity,
+                                        'county': str(row.get('County', ''))[:200],
+                                        'state': 'TX',
+                                        'customer': str(row.get('Interconnecting Entity', row.get('Developer', '')))[:500],
+                                        'utility': 'ERCOT',
+                                        'status': str(row.get('Status', 'Active')),
+                                        'fuel_type': str(row.get('Fuel', row.get('Technology', ''))),
+                                        'source': 'ERCOT',
+                                        'source_url': url,
+                                    }
+                                    
+                                    score_result = self.calculate_hunter_score(data)
+                                    data.update(score_result)
+                                    data['project_type'] = 'datacenter' if score_result['hunter_score'] >= 60 else 'other'
+                                    data['data_hash'] = self.generate_hash(data)
+                                    projects.append(data)
+                            
+                            logger.info(f"ERCOT: Found {len(projects)} projects")
+                            return projects  # Success!
+                            
+                    except Exception as e:
+                        logger.debug(f"ERCOT: Failed {month_str}: {e}")
+                        continue
+            
+            logger.warning("ERCOT: No valid data found. Check ERCOT website manually.")
+                        
+        except Exception as e:
+            logger.error(f"ERCOT error: {e}", exc_info=True)
+        
+        return projects
     
     # ==================== MAIN RUNNER ====================
     def run_ultra_monitoring(self, max_workers=4):
-        """Run monitoring with all enabled sources"""
+        """Run monitoring with all 6 ISOs"""
         start_time = time.time()
         all_projects = []
         source_stats = {}
         
+        # All 6 ISOs enabled!
         monitors = [
             ('CAISO', self.fetch_caiso),
             ('NYISO', self.fetch_nyiso),
             ('SPP', self.fetch_spp),
-            ('PJM', self.fetch_pjm),              # NEW: Public scraper!
-            ('VA SCC', self.fetch_virginia_scc),   # NEW: Virginia coverage!
+            ('MISO', self.fetch_miso),        # NEW!
+            ('ISO-NE', self.fetch_isone),     # NEW!
+            ('ERCOT', self.fetch_ercot),      # NEW!
         ]
         
-        logger.info(f"UPGRADED: Running {len(monitors)} sources (including PJM + VA SCC)...")
+        logger.info(f"COMPLETE SCAN: Running {len(monitors)} ISOs (6 sources)...")
         
         for source_name, fetch_func in monitors:
             try:
