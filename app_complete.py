@@ -397,12 +397,15 @@ class HybridPowerMonitor:
         projects = []
         
         # Berkeley Lab publishes data quarterly/annually
-        # Try multiple URL patterns as they sometimes change
+        # Try 2025 first, then fall back to 2024 if not available yet
         possible_urls = [
+            # 2025 Edition (just published, file may not be uploaded yet)
             'https://eta-publications.lbl.gov/sites/default/files/2025-12/queued_up_2025_data_file.xlsx',
             'https://emp.lbl.gov/sites/default/files/2025-12/queued_up_2025_data_file.xlsx',
-            'https://eta-publications.lbl.gov/sites/default/files/lbnl_interconnection_queue_2025.xlsx',
-            'https://emp.lbl.gov/sites/default/files/queued_up_2025_data_file.xlsx',
+            # 2024 Edition (fallback - data through end of 2023)
+            'https://emp.lbl.gov/sites/default/files/2024-04/queued_up_2024_data_file.xlsx',
+            'https://eta-publications.lbl.gov/sites/default/files/2024-04/queued_up_2024_data_file.xlsx',
+            'https://emp.lbl.gov/sites/default/files/lbnl_interconnection_queue_2024.xlsx',
         ]
         
         excel_data = None
@@ -642,7 +645,21 @@ class HybridPowerMonitor:
             response = self.session.get(csv_url, timeout=30, verify=False)
             
             if response.status_code == 200:
-                df = pd.read_csv(StringIO(response.text))
+                # SPP CSV often has metadata rows at the top - try to find the header row
+                lines = response.text.split('\n')
+                header_row_idx = 0
+                
+                # Look for a row that has typical column names
+                for i, line in enumerate(lines[:20]):  # Check first 20 lines
+                    if 'Request' in line or 'Project' in line or 'Generation' in line or 'GEN-' in line:
+                        header_row_idx = i
+                        logger.info(f"SPP: Found header row at line {i}")
+                        break
+                
+                # Re-read CSV starting from the header row
+                csv_data = '\n'.join(lines[header_row_idx:])
+                df = pd.read_csv(StringIO(csv_data))
+                
                 logger.info(f"SPP: Processing {len(df)} rows")
                 
                 # Find MW columns - SPP uses various naming conventions
@@ -658,7 +675,9 @@ class HybridPowerMonitor:
                         'Summer Capacity', 'Winter Capacity',
                         'Max Capacity', 'Nameplate',
                         'Gen MW', 'Generator MW',
-                        'Net MW', 'Gross MW'
+                        'Net MW', 'Gross MW',
+                        'Summer MW', 'Winter MW',
+                        'Net Summer Capacity', 'Net Winter Capacity'
                     ]
                     
                     for col in possible_cols:
@@ -668,12 +687,22 @@ class HybridPowerMonitor:
                                 break
                     
                     if capacity and capacity >= self.min_capacity_mw:
+                        # Try different variations of request ID column
+                        request_id = None
+                        for id_col in ['Request Number', 'GEN-', 'Request', 'ID', 'Queue ID']:
+                            if id_col in df.columns and row.get(id_col):
+                                request_id = str(row.get(id_col))
+                                break
+                        
+                        if not request_id:
+                            request_id = f"SPP_{len(projects)}"
+                        
                         data = {
-                            'request_id': f"SPP_{row.get('Request Number', row.get('GEN-', 'UNK'))}",
-                            'project_name': str(row.get('Project Name', 'Unknown'))[:500],
+                            'request_id': f"SPP_{request_id}",
+                            'project_name': str(row.get('Project Name', row.get('Project', 'Unknown')))[:500],
                             'capacity_mw': capacity,
-                            'state': str(row.get('State', ''))[:2],
-                            'customer': str(row.get('Customer', ''))[:500],
+                            'state': str(row.get('State', row.get('ST', '')))[:2],
+                            'customer': str(row.get('Customer', row.get('Interconnection Customer', '')))[:500],
                             'utility': 'SPP',
                             'status': str(row.get('Status', 'Active')),
                             'source': 'SPP',
