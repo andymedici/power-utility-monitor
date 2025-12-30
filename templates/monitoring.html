@@ -1,42 +1,128 @@
 {% extends "base.html" %}
-{% block title %}System Monitoring{% endblock %}
+{% block title %}System Monitoring - Power Monitor{% endblock %}
+
 {% block content %}
 <h2 class="mb-4"><i class="bi bi-activity"></i> System Monitoring</h2>
+
+<!-- Status Cards -->
 <div class="row mb-4">
-    <div class="col-md-3">
+    <div class="col-md-3 mb-3">
         <div class="card text-center border-success">
-            <div class="card-body"><h5 class="text-success">Status</h5><h2><i class="bi bi-check-circle-fill text-success"></i></h2><p>Operational</p></div>
+            <div class="card-body">
+                <h5 class="text-success">Status</h5>
+                <h2><i class="bi bi-check-circle-fill text-success"></i></h2>
+                <p class="mb-0">Operational</p>
+            </div>
         </div>
     </div>
-    <div class="col-md-3">
+    <div class="col-md-3 mb-3">
         <div class="card text-center">
-            <div class="card-body"><h5>Sources</h5><h2>{{ source_stats|length }}</h2><p>Active</p></div>
+            <div class="card-body">
+                <h5>Data Sources</h5>
+                <h2>{{ source_stats|length }}</h2>
+                <p class="mb-0">Active ISOs</p>
+            </div>
         </div>
     </div>
-    <div class="col-md-3">
+    <div class="col-md-3 mb-3">
         <div class="card text-center">
-            <div class="card-body"><h5>Last Scan</h5><h2>{% if runs %}{{ runs[0].run_date.strftime('%H:%M') }}{% else %}Never{% endif %}</h2></div>
+            <div class="card-body">
+                <h5>Last Scan</h5>
+                <h2>{% if runs %}{{ runs[0].run_date[:16] }}{% else %}Never{% endif %}</h2>
+                <p class="mb-0">{% if runs %}{{ runs[0].projects_found }} found{% endif %}</p>
+            </div>
         </div>
     </div>
-    <div class="col-md-3">
+    <div class="col-md-3 mb-3">
         <div class="card text-center">
-            <div class="card-body"><h5>Cost</h5><h2 class="text-success">$0</h2><p>Free Sources</p></div>
+            <div class="card-body">
+                <h5>API Cost</h5>
+                <h2 class="text-success">$0</h2>
+                <p class="mb-0">Free Sources Only</p>
+            </div>
         </div>
     </div>
 </div>
+
+<!-- Source Status -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-server"></i> Data Source Status</h5>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Source</th>
+                            <th>Last Sync</th>
+                            <th>Total Found</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for src in source_stats %}
+                        <tr>
+                            <td>
+                                <span class="utility-badge utility-{{ src.source }}">{{ src.source }}</span>
+                            </td>
+                            <td>{{ src.last_sync or 'Never' }}</td>
+                            <td>{{ src.total_found or 0 }}</td>
+                            <td>
+                                {% if src.total_found and src.total_found > 0 %}
+                                <span class="badge bg-success">Working</span>
+                                {% else %}
+                                <span class="badge bg-warning">No Data</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        {% if not source_stats %}
+                        <tr>
+                            <td colspan="4" class="text-center py-4 text-muted">
+                                No sync data yet. <a href="{{ url_for('trigger_monitor') }}">Run first sync</a>
+                            </td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Runs -->
 <div class="card">
-    <div class="card-header bg-white d-flex justify-content-between">
-        <h5><i class="bi bi-clock-history"></i> Recent Scans</h5>
-        <a href="{{ url_for('trigger_monitor') }}" class="btn btn-primary btn-sm"><i class="bi bi-play"></i> Run Now</a>
+    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-clock-history"></i> Recent Scans</h5>
+        <a href="{{ url_for('trigger_monitor') }}" class="btn btn-primary btn-sm">
+            <i class="bi bi-play-fill"></i> Run Now
+        </a>
     </div>
     <div class="table-responsive">
         <table class="table mb-0">
-            <thead><tr><th>Date/Time</th><th>Status</th><th>Sources</th><th>Found</th><th>Stored</th><th>Duration</th></tr></thead>
+            <thead>
+                <tr>
+                    <th>Date/Time</th>
+                    <th>Status</th>
+                    <th>Sources</th>
+                    <th>Found</th>
+                    <th>Stored</th>
+                    <th>Duration</th>
+                </tr>
+            </thead>
             <tbody>
                 {% for run in runs %}
                 <tr>
-                    <td>{{ run.run_date.strftime('%Y-%m-%d %H:%M') }}</td>
-                    <td><span class="badge bg-success">{{ run.status|title }}</span></td>
+                    <td>{{ run.run_date }}</td>
+                    <td>
+                        {% if run.status == 'success' %}
+                        <span class="badge bg-success">Success</span>
+                        {% else %}
+                        <span class="badge bg-danger">{{ run.status }}</span>
+                        {% endif %}
+                    </td>
                     <td>{{ run.sources_checked }}</td>
                     <td>{{ run.projects_found }}</td>
                     <td><strong class="text-success">{{ run.projects_stored }}</strong></td>
@@ -44,7 +130,11 @@
                 </tr>
                 {% endfor %}
                 {% if not runs %}
-                <tr><td colspan="6" class="text-center py-4">No runs yet. <a href="{{ url_for('trigger_monitor') }}">Run Now</a></td></tr>
+                <tr>
+                    <td colspan="6" class="text-center py-4">
+                        No runs yet. <a href="{{ url_for('trigger_monitor') }}">Run Now</a>
+                    </td>
+                </tr>
                 {% endif %}
             </tbody>
         </table>
