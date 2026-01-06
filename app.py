@@ -1,7 +1,7 @@
 """
 Power Monitor - Complete Application
 =====================================
-VERSION: 2.3.0 (Jan 6, 2026 - Berkeley Lab header row fix)
+VERSION: 2.4.0 (Jan 6, 2026 - Berkeley Lab header row offset fix)
 
 Automated interconnection queue monitoring for all 7 US ISOs.
 
@@ -17,7 +17,7 @@ Sources:
 Expected: 8,500+ projects
 """
 
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.4.0"
 
 import os
 import sys
@@ -854,15 +854,20 @@ class HybridPowerMonitor:
                 break
         
         if header_row_idx is not None:
+            # The header_row_idx is relative to the DATA rows (after current header)
+            # Since original read used header=0, the Excel row is header_row_idx + 1
+            actual_header_row = header_row_idx + 1
+            logger.info(f"Berkeley Lab: Actual Excel header row is {actual_header_row}")
+            
             # Re-read with correct header row
             if excel_content is not None:
                 # Re-read from the saved content
                 excel_file = pd.ExcelFile(BytesIO(excel_content))
-                df = pd.read_excel(excel_file, sheet_name=selected_sheet, header=header_row_idx)
+                df = pd.read_excel(excel_file, sheet_name=selected_sheet, header=actual_header_row)
             elif successful_url and not successful_url.startswith('http'):
                 # Local file
-                df = pd.read_excel(successful_url.replace('file://', ''), header=header_row_idx)
-            logger.info(f"Berkeley Lab: Re-read with header at row {header_row_idx}, now {len(df)} rows")
+                df = pd.read_excel(successful_url.replace('file://', ''), header=actual_header_row)
+            logger.info(f"Berkeley Lab: Re-read with header at Excel row {actual_header_row}, now {len(df)} rows")
         
         # Clean column names (remove whitespace, normalize)
         df.columns = [str(c).strip() for c in df.columns]
