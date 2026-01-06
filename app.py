@@ -1,7 +1,7 @@
 """
 Power Monitor - Complete Application
 =====================================
-VERSION: 2.1.0 (Jan 6, 2026 - MISO + Berkeley Lab fix)
+VERSION: 2.2.0 (Jan 6, 2026 - Berkeley Lab sheet fix)
 
 Automated interconnection queue monitoring for all 7 US ISOs.
 
@@ -17,7 +17,7 @@ Sources:
 Expected: 8,500+ projects
 """
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 
 import os
 import sys
@@ -698,15 +698,46 @@ class HybridPowerMonitor:
                                 excel_file = pd.ExcelFile(BytesIO(response.content))
                                 logger.info(f"Berkeley Lab: Found {len(excel_file.sheet_names)} sheets: {excel_file.sheet_names}")
                                 
-                                # Look for the data sheet by name first
+                                # Look for the data sheet by name first - be specific!
                                 data_sheet = None
+                                
+                                # Priority 1: Look for "Complete" data sheets
                                 for sheet_name in excel_file.sheet_names:
                                     sheet_lower = sheet_name.lower()
-                                    # Common data sheet names
-                                    if any(kw in sheet_lower for kw in ['full data', 'data', 'queue', 'project', 'active', 'all requests']):
+                                    if 'complete' in sheet_lower and ('data' in sheet_lower or 'queue' in sheet_lower):
                                         data_sheet = sheet_name
-                                        logger.info(f"Berkeley Lab: Found data sheet by name: '{sheet_name}'")
+                                        logger.info(f"Berkeley Lab: Found complete data sheet: '{sheet_name}'")
                                         break
+                                
+                                # Priority 2: Look for "Full" data sheets
+                                if data_sheet is None:
+                                    for sheet_name in excel_file.sheet_names:
+                                        sheet_lower = sheet_name.lower()
+                                        if 'full' in sheet_lower and 'data' in sheet_lower:
+                                            data_sheet = sheet_name
+                                            logger.info(f"Berkeley Lab: Found full data sheet: '{sheet_name}'")
+                                            break
+                                
+                                # Priority 3: Look for "All" requests/projects
+                                if data_sheet is None:
+                                    for sheet_name in excel_file.sheet_names:
+                                        sheet_lower = sheet_name.lower()
+                                        if 'all' in sheet_lower and ('request' in sheet_lower or 'project' in sheet_lower or 'queue' in sheet_lower):
+                                            data_sheet = sheet_name
+                                            logger.info(f"Berkeley Lab: Found all requests sheet: '{sheet_name}'")
+                                            break
+                                
+                                # Priority 4: Generic data/queue but NOT sample/summary
+                                if data_sheet is None:
+                                    for sheet_name in excel_file.sheet_names:
+                                        sheet_lower = sheet_name.lower()
+                                        # Skip sample, summary, background, methods sheets
+                                        if any(skip in sheet_lower for skip in ['sample', 'summary', 'background', 'method', 'intro', 'content', 'codebook']):
+                                            continue
+                                        if any(kw in sheet_lower for kw in ['data', 'queue', 'project', 'active', 'request']):
+                                            data_sheet = sheet_name
+                                            logger.info(f"Berkeley Lab: Found data sheet by name: '{sheet_name}'")
+                                            break
                                 
                                 # If no obvious data sheet name, check each sheet for real data
                                 if data_sheet is None:
