@@ -503,24 +503,32 @@ class HybridPowerMonitor:
         return projects
 
     # =========================================================================
-    # PJM - Via Berkeley Lab (automated)
+    # PJM - Via Berkeley Lab (PJM API requires paid membership)
     # =========================================================================
     def fetch_pjm(self):
-        """PJM data from Berkeley Lab cache or fresh fetch"""
+        """
+        PJM data via Berkeley Lab's comprehensive dataset.
+        Note: PJM's own API requires paid membership, so we use Berkeley Lab.
+        """
+        projects = []
+        
+        # Check cache first
         if 'PJM' in self.berkeley_lab_cache and self.berkeley_lab_cache['PJM']:
             logger.info(f"PJM: Using cached data ({len(self.berkeley_lab_cache['PJM'])} projects)")
             return self.berkeley_lab_cache['PJM']
         
-        # Try to fetch Berkeley Lab data
+        # Fetch from Berkeley Lab
+        logger.info("PJM: Fetching from Berkeley Lab dataset")
         berkeley_projects = self.fetch_berkeley_lab()
         
-        # Extract PJM
+        # Extract PJM projects
         pjm_projects = [p for p in berkeley_projects if p.get('utility') == 'PJM']
+        
         if pjm_projects:
             self.berkeley_lab_cache['PJM'] = pjm_projects
-            logger.info(f"PJM: Got {len(pjm_projects)} projects from Berkeley Lab")
+            logger.info(f"PJM: Extracted {len(pjm_projects)} projects from Berkeley Lab")
         else:
-            logger.warning("PJM: No data available (Berkeley Lab fetch failed)")
+            logger.warning("PJM: No data found in Berkeley Lab dataset")
         
         return pjm_projects
 
@@ -532,16 +540,15 @@ class HybridPowerMonitor:
         projects = []
         
         # Strategy 1: Try known URL patterns
+        # WORKING URL - Note the specific capitalization is critical!
         urls_to_try = [
-            # 2025 patterns
-            'https://emp.lbl.gov/sites/default/files/2025-12/queued_up_2025_data_file.xlsx',
-            'https://emp.lbl.gov/sites/default/files/queued_up_2025_data_file.xlsx',
-            'https://eta-publications.lbl.gov/sites/default/files/2025-12/queued_up_2025_data_file.xlsx',
-            # 2024 patterns
+            # 2025 Edition - VERIFIED WORKING (user-provided, Jan 2026)
+            'https://emp.lbl.gov/sites/default/files/2025-08/LBNL_Ix_Queue_Data_File_thru2024_v2.xlsx',
+            # Alternative patterns with correct capitalization
+            'https://emp.lbl.gov/sites/default/files/2025-12/LBNL_Ix_Queue_Data_File_thru2024_v2.xlsx',
+            'https://eta-publications.lbl.gov/sites/default/files/2025-08/LBNL_Ix_Queue_Data_File_thru2024_v2.xlsx',
+            # 2024 fallback
             'https://emp.lbl.gov/sites/default/files/2024-04/queued_up_2024_data_file.xlsx',
-            'https://eta-publications.lbl.gov/sites/default/files/2024-04/queued_up_2024_data_file.xlsx',
-            # Generic patterns
-            'https://emp.lbl.gov/sites/default/files/queued_up_data_file.xlsx',
         ]
         
         # Different header combinations to try
