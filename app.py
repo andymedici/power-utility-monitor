@@ -1,7 +1,7 @@
 """
 Power Monitor - Complete Application
 =====================================
-VERSION: 2.2.0 (Jan 6, 2026 - Berkeley Lab sheet fix)
+VERSION: 2.3.0 (Jan 6, 2026 - Berkeley Lab header row fix)
 
 Automated interconnection queue monitoring for all 7 US ISOs.
 
@@ -17,7 +17,7 @@ Sources:
 Expected: 8,500+ projects
 """
 
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 
 import os
 import sys
@@ -676,6 +676,8 @@ class HybridPowerMonitor:
         
         df = None
         successful_url = None
+        excel_content = None  # Save for re-reading with correct header
+        selected_sheet = None  # Save sheet name for re-reading
         
         for url in urls_to_try:
             for headers in header_sets:
@@ -786,13 +788,17 @@ class HybridPowerMonitor:
                                 else:
                                     # Last resort - try sheet index 1 (often data is on second sheet after cover)
                                     if len(excel_file.sheet_names) > 1:
-                                        df = pd.read_excel(excel_file, sheet_name=1)
-                                        logger.info(f"Berkeley Lab: Using sheet index 1 ('{excel_file.sheet_names[1]}') with {len(df)} rows")
+                                        data_sheet = excel_file.sheet_names[1]
+                                        df = pd.read_excel(excel_file, sheet_name=data_sheet)
+                                        logger.info(f"Berkeley Lab: Using sheet index 1 ('{data_sheet}') with {len(df)} rows")
                                     else:
-                                        df = pd.read_excel(excel_file, sheet_name=0)
-                                        logger.info(f"Berkeley Lab: Using sheet index 0 with {len(df)} rows")
+                                        data_sheet = excel_file.sheet_names[0]
+                                        df = pd.read_excel(excel_file, sheet_name=data_sheet)
+                                        logger.info(f"Berkeley Lab: Using sheet index 0 ('{data_sheet}') with {len(df)} rows")
                                 
                                 successful_url = url
+                                excel_content = response.content  # Save for re-reading
+                                selected_sheet = data_sheet  # Save sheet name
                                 logger.info(f"Berkeley Lab: SUCCESS! Final sheet has {len(df)} rows")
                                 break
                             else:
@@ -831,6 +837,35 @@ class HybridPowerMonitor:
             logger.error("Berkeley Lab: All fetch attempts failed")
             logger.info("Berkeley Lab: Download manually from https://emp.lbl.gov/queues and place in /app/data/")
             return projects
+        
+        # The sheet often has navigation/title rows at the top - find the actual header row
+        # Look for a row that contains typical column names
+        header_keywords = ['entity', 'region', 'queue', 'capacity', 'mw', 'state', 'county', 'status', 'resource', 'developer']
+        header_row_idx = None
+        
+        # Check first 20 rows to find the header
+        for idx in range(min(20, len(df))):
+            row_values = [str(v).lower() for v in df.iloc[idx].values if pd.notna(v)]
+            row_text = ' '.join(row_values)
+            matches = sum(1 for kw in header_keywords if kw in row_text)
+            if matches >= 3:  # Found at least 3 header keywords
+                header_row_idx = idx
+                logger.info(f"Berkeley Lab: Found header row at index {idx}: {row_values[:5]}")
+                break
+        
+        if header_row_idx is not None:
+            # Re-read with correct header row
+            if excel_content is not None:
+                # Re-read from the saved content
+                excel_file = pd.ExcelFile(BytesIO(excel_content))
+                df = pd.read_excel(excel_file, sheet_name=selected_sheet, header=header_row_idx)
+            elif successful_url and not successful_url.startswith('http'):
+                # Local file
+                df = pd.read_excel(successful_url.replace('file://', ''), header=header_row_idx)
+            logger.info(f"Berkeley Lab: Re-read with header at row {header_row_idx}, now {len(df)} rows")
+        
+        # Clean column names (remove whitespace, normalize)
+        df.columns = [str(c).strip() for c in df.columns]
         
         # Process the dataframe
         logger.info(f"Berkeley Lab: Processing {len(df)} rows")
