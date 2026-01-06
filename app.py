@@ -1,6 +1,8 @@
 """
 Power Monitor - Complete Application
 =====================================
+VERSION: 2.1.0 (Jan 6, 2026 - MISO + Berkeley Lab fix)
+
 Automated interconnection queue monitoring for all 7 US ISOs.
 
 Sources:
@@ -14,6 +16,8 @@ Sources:
 
 Expected: 8,500+ projects
 """
+
+APP_VERSION = "2.1.0"
 
 import os
 import sys
@@ -426,41 +430,140 @@ class HybridPowerMonitor:
         return projects
 
     # =========================================================================
-    # MISO - FREE JSON API
+    # MISO - FREE JSON API (with gridstatus fallback)
     # =========================================================================
     def fetch_miso(self):
         projects = []
+        
+        # Try direct API first
+        projects = self._fetch_miso_direct()
+        
+        # If direct API failed, try gridstatus
+        if not projects and GRIDSTATUS_AVAILABLE:
+            logger.info("MISO: Direct API returned no data, trying gridstatus fallback")
+            projects = self._fetch_miso_gridstatus()
+        
+        return projects
+    
+    def _fetch_miso_direct(self):
+        """Fetch MISO data directly from JSON API"""
+        projects = []
         url = "https://www.misoenergy.org/api/giqueue/getprojects"
         try:
-            logger.info(f"MISO: Fetching from JSON API")
+            logger.info(f"MISO: Fetching from JSON API (v{APP_VERSION})")
             response = self.session.get(url, timeout=60)
-            if response.status_code == 200:
-                data = response.json()
-                logger.info(f"MISO: Found {len(data)} rows")
+            
+            if response.status_code != 200:
+                logger.error(f"MISO: API returned status {response.status_code}")
+                logger.error(f"MISO: Response text: {response.text[:500]}")
+                return projects
+            
+            data = response.json()
+            
+            if not data:
+                logger.warning("MISO: API returned empty data")
+                return projects
+            
+            logger.info(f"MISO: Found {len(data)} rows from API")
+            
+            # Log sample record to debug field names
+            if data and len(data) > 0:
+                sample = data[0]
+                logger.info(f"MISO: Sample record keys: {list(sample.keys())}")
+                # Log a few key fields to see what we're getting
+                sample_fields = {k: sample.get(k) for k in ['summerNetMW', 'winterNetMW', 'mw', 'MW', 'capacity', 'jNumber', 'projectName'] if k in sample}
+                logger.info(f"MISO: Sample field values: {sample_fields}")
+            
+            for item in data:
+                # Try multiple capacity fields
+                capacity = None
+                for cap_field in ['summerNetMW', 'winterNetMW', 'mw', 'MW', 'capacity', 'netMW', 'Capacity']:
+                    cap_val = item.get(cap_field)
+                    if cap_val is not None:
+                        capacity = self.extract_capacity(cap_val)
+                        if capacity:
+                            break
                 
-                for item in data:
-                    capacity = self.extract_capacity(item.get('summerNetMW') or item.get('winterNetMW') or 0)
-                    if capacity:
-                        proj = {
-                            'request_id': f"MISO_{item.get('jNumber', 'UNK')}",
-                            'project_name': str(item.get('projectName', 'Unknown'))[:500],
-                            'capacity_mw': capacity,
-                            'county': str(item.get('county', ''))[:200],
-                            'state': str(item.get('state', ''))[:2],
-                            'customer': str(item.get('interconnectionEntity', ''))[:500],
-                            'utility': 'MISO',
-                            'status': str(item.get('status', 'Active')),
-                            'fuel_type': str(item.get('fuelType', '')),
-                            'source': 'MISO',
-                            'source_url': url,
-                            'project_type': self.classify_project(item.get('projectName', ''), item.get('interconnectionEntity', ''), item.get('fuelType', ''))
-                        }
-                        proj['hunter_score'] = self.calculate_hunter_score(proj)
-                        proj['data_hash'] = self.generate_hash(proj)
-                        projects.append(proj)
-                logger.info(f"MISO: Extracted {len(projects)} projects")
+                if capacity:
+                    proj = {
+                        'request_id': f"MISO_{item.get('jNumber', item.get('queueNumber', item.get('Queue Number', 'UNK')))}",
+                        'project_name': str(item.get('projectName', item.get('name', item.get('Project Name', 'Unknown'))))[:500],
+                        'capacity_mw': capacity,
+                        'county': str(item.get('county', item.get('County', '')))[:200],
+                        'state': str(item.get('state', item.get('State', '')))[:2],
+                        'customer': str(item.get('interconnectionEntity', item.get('developer', item.get('Developer', ''))))[:500],
+                        'utility': 'MISO',
+                        'status': str(item.get('status', item.get('queueStatus', item.get('Status', 'Active')))),
+                        'fuel_type': str(item.get('fuelType', item.get('fuel', item.get('Fuel Type', '')))),
+                        'source': 'MISO',
+                        'source_url': url,
+                        'project_type': self.classify_project(
+                            item.get('projectName', item.get('Project Name', '')), 
+                            item.get('interconnectionEntity', item.get('Developer', '')), 
+                            item.get('fuelType', item.get('Fuel Type', ''))
+                        )
+                    }
+                    proj['hunter_score'] = self.calculate_hunter_score(proj)
+                    proj['data_hash'] = self.generate_hash(proj)
+                    projects.append(proj)
+            
+            logger.info(f"MISO: Extracted {len(projects)} projects (>= {self.min_capacity_mw} MW)")
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"MISO: Network error: {e}")
+        except json.JSONDecodeError as e:
+            logger.error(f"MISO: JSON parse error: {e}")
+            logger.error(f"MISO: Response content: {response.text[:500]}")
         except Exception as e:
-            logger.error(f"MISO failed: {e}")
+            logger.error(f"MISO: Unexpected error: {e}")
+            import traceback
+            logger.error(f"MISO: Traceback: {traceback.format_exc()}")
+        
+        return projects
+    
+    def _fetch_miso_gridstatus(self):
+        """Fallback: Fetch MISO data via gridstatus library"""
+        projects = []
+        try:
+            logger.info("MISO: Fetching via gridstatus.MISO()")
+            miso = gridstatus.MISO()
+            df = miso.get_interconnection_queue()
+            logger.info(f"MISO: gridstatus returned {len(df)} rows")
+            logger.info(f"MISO: gridstatus columns: {list(df.columns)[:10]}")
+            
+            for _, row in df.iterrows():
+                # gridstatus normalizes the column name to 'Capacity (MW)'
+                capacity = self.extract_capacity(row.get('Capacity (MW)') or row.get('summerNetMW') or row.get('winterNetMW') or 0)
+                if capacity:
+                    proj = {
+                        'request_id': f"MISO_{row.get('Queue ID', row.get('jNumber', row.name))}",
+                        'project_name': str(row.get('Project Name', row.get('projectName', 'Unknown')))[:500],
+                        'capacity_mw': capacity,
+                        'county': str(row.get('County', row.get('county', '')))[:200],
+                        'state': str(row.get('State', row.get('state', '')))[:2],
+                        'customer': str(row.get('Interconnecting Entity', row.get('interconnectionEntity', '')))[:500],
+                        'utility': 'MISO',
+                        'status': str(row.get('Status', row.get('status', 'Active'))),
+                        'fuel_type': str(row.get('Fuel Type', row.get('fuelType', ''))),
+                        'source': 'MISO',
+                        'source_url': 'gridstatus',
+                        'project_type': self.classify_project(
+                            row.get('Project Name', row.get('projectName', '')),
+                            row.get('Interconnecting Entity', row.get('interconnectionEntity', '')),
+                            row.get('Fuel Type', row.get('fuelType', ''))
+                        )
+                    }
+                    proj['hunter_score'] = self.calculate_hunter_score(proj)
+                    proj['data_hash'] = self.generate_hash(proj)
+                    projects.append(proj)
+            
+            logger.info(f"MISO: gridstatus extracted {len(projects)} projects")
+            
+        except Exception as e:
+            logger.error(f"MISO: gridstatus fallback failed: {e}")
+            import traceback
+            logger.error(f"MISO: Traceback: {traceback.format_exc()}")
+        
         return projects
 
     # =========================================================================
@@ -589,9 +692,77 @@ class HybridPowerMonitor:
                         if content_length > 100000:
                             # Check for Excel magic bytes (PK for xlsx)
                             if response.content[:2] == b'PK' or 'spreadsheet' in content_type or 'excel' in content_type:
-                                df = pd.read_excel(BytesIO(response.content), sheet_name=0)
+                                logger.info(f"Berkeley Lab: Downloaded {content_length/1024/1024:.1f} MB from {url}")
+                                
+                                # Try to find the correct sheet with project data
+                                excel_file = pd.ExcelFile(BytesIO(response.content))
+                                logger.info(f"Berkeley Lab: Found {len(excel_file.sheet_names)} sheets: {excel_file.sheet_names}")
+                                
+                                # Look for the data sheet by name first
+                                data_sheet = None
+                                for sheet_name in excel_file.sheet_names:
+                                    sheet_lower = sheet_name.lower()
+                                    # Common data sheet names
+                                    if any(kw in sheet_lower for kw in ['full data', 'data', 'queue', 'project', 'active', 'all requests']):
+                                        data_sheet = sheet_name
+                                        logger.info(f"Berkeley Lab: Found data sheet by name: '{sheet_name}'")
+                                        break
+                                
+                                # If no obvious data sheet name, check each sheet for real data
+                                if data_sheet is None:
+                                    logger.info("Berkeley Lab: No obvious data sheet name, checking content...")
+                                    best_sheet = None
+                                    best_rows = 0
+                                    
+                                    for sheet_name in excel_file.sheet_names:
+                                        try:
+                                            # Read first few rows to check columns
+                                            temp_df = pd.read_excel(excel_file, sheet_name=sheet_name, nrows=10)
+                                            cols_lower = [str(c).lower() for c in temp_df.columns]
+                                            
+                                            # Check for typical interconnection queue column names
+                                            has_data_cols = any(
+                                                kw in ' '.join(cols_lower) 
+                                                for kw in ['entity', 'region', 'iso', 'queue', 'capacity', 'mw', 'state', 'county', 'developer']
+                                            )
+                                            
+                                            if has_data_cols:
+                                                full_df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                                                logger.info(f"Berkeley Lab: Sheet '{sheet_name}' has {len(full_df)} rows, data columns detected")
+                                                if len(full_df) > best_rows:
+                                                    best_rows = len(full_df)
+                                                    best_sheet = sheet_name
+                                            else:
+                                                # Still count rows as fallback
+                                                full_df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                                                if len(full_df) > 100 and len(full_df) > best_rows:
+                                                    # Only use as fallback if no better option
+                                                    if best_sheet is None:
+                                                        best_rows = len(full_df)
+                                                        best_sheet = sheet_name
+                                        except Exception as e:
+                                            logger.debug(f"Berkeley Lab: Error reading sheet '{sheet_name}': {e}")
+                                            continue
+                                    
+                                    data_sheet = best_sheet
+                                    if data_sheet:
+                                        logger.info(f"Berkeley Lab: Selected sheet '{data_sheet}' with {best_rows} rows")
+                                
+                                # Read the data sheet
+                                if data_sheet:
+                                    df = pd.read_excel(excel_file, sheet_name=data_sheet)
+                                    logger.info(f"Berkeley Lab: Loaded sheet '{data_sheet}' with {len(df)} rows")
+                                else:
+                                    # Last resort - try sheet index 1 (often data is on second sheet after cover)
+                                    if len(excel_file.sheet_names) > 1:
+                                        df = pd.read_excel(excel_file, sheet_name=1)
+                                        logger.info(f"Berkeley Lab: Using sheet index 1 ('{excel_file.sheet_names[1]}') with {len(df)} rows")
+                                    else:
+                                        df = pd.read_excel(excel_file, sheet_name=0)
+                                        logger.info(f"Berkeley Lab: Using sheet index 0 with {len(df)} rows")
+                                
                                 successful_url = url
-                                logger.info(f"Berkeley Lab: SUCCESS! Downloaded {content_length/1024/1024:.1f} MB from {url}")
+                                logger.info(f"Berkeley Lab: SUCCESS! Final sheet has {len(df)} rows")
                                 break
                             else:
                                 logger.debug(f"Berkeley Lab: Got response but not Excel (type: {content_type}, size: {content_length})")
@@ -1119,7 +1290,7 @@ def api_sync():
 def init_app():
     """Initialize application"""
     os.makedirs(DATA_DIR, exist_ok=True)
-    logger.info(f"Power Monitor starting. gridstatus: {GRIDSTATUS_AVAILABLE}")
+    logger.info(f"Power Monitor v{APP_VERSION} starting. gridstatus: {GRIDSTATUS_AVAILABLE}")
     
     # Check if we need initial sync
     count = db.fetchone('SELECT COUNT(*) as count FROM projects')['count']
